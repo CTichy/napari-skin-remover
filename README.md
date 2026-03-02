@@ -45,7 +45,20 @@ pip install imaris_ims_file_reader
 
 The plugin requires a trained `.pth` checkpoint — **not included in this repo** (file size ~220 MB).
 
-Obtain `best_model_fullstack.pth` from the project maintainer and place it anywhere accessible. Use the **Browse (...)** button in the widget to point to it.
+**Download:**
+[best_model_fullstack_v1_epoch460_dice9573.pth](https://cloud.technikum-wien.at/s/kYQ4qq3Jsn4xEyY)
+
+**Where to put it:**
+
+Create a `models` folder anywhere convenient, for example:
+
+```
+Documents/
+└── brain-peel-model/
+    └── best_model_fullstack_v1_epoch460_dice9573.pth
+```
+
+Then point the plugin to it using the **Browse (...)** button in the widget. The path is saved automatically and remembered across sessions — you only need to do this once.
 
 ---
 
