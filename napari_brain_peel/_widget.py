@@ -2,6 +2,7 @@
 _widget.py — BrainPeelWidget napari dock panel.
 """
 
+import json
 import threading
 import traceback
 from pathlib import Path
@@ -19,6 +20,30 @@ from qtpy.QtCore import Qt, QTimer
 
 from ._io import load_file
 from ._inference import DEFAULT_MODEL, _SKIN_SEG_DIR, run_inference
+
+_CONFIG_PATH = Path.home() / ".config" / "napari-brain-peel" / "config.json"
+
+
+def _load_saved_model_path():
+    """Return the last-used model path from config, or None."""
+    try:
+        if _CONFIG_PATH.exists():
+            data = json.loads(_CONFIG_PATH.read_text())
+            p = Path(data.get("model_path", ""))
+            if p.exists():
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def _save_model_path(path: Path):
+    """Persist model path to config file."""
+    try:
+        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CONFIG_PATH.write_text(json.dumps({"model_path": str(path)}))
+    except Exception:
+        pass
 
 
 def _sep():
@@ -58,10 +83,18 @@ class BrainPeelWidget(QWidget):
     def __init__(self, napari_viewer: "napari.viewer.Viewer"):
         super().__init__()
         self._viewer = napari_viewer
+        # Model path priority: saved config > hardcoded default > None
+        saved = _load_saved_model_path()
+        if saved:
+            initial_model = saved
+        elif DEFAULT_MODEL.exists():
+            initial_model = DEFAULT_MODEL
+        else:
+            initial_model = None
         self._state = {
-            "model_path":    DEFAULT_MODEL if DEFAULT_MODEL.exists() else None,
+            "model_path":     initial_model,
             "last_file_path": None,
-            "metadata":      None,
+            "metadata":       None,
         }
         self._build_ui()
         self._connect_signals()
@@ -87,7 +120,7 @@ class BrainPeelWidget(QWidget):
         layout.addWidget(QLabel("Model (.pth):"))
         model_row = QHBoxLayout()
         self._model_lbl = QLabel(
-            str(DEFAULT_MODEL) if DEFAULT_MODEL.exists() else "— no default found —"
+            str(self._state["model_path"]) if self._state["model_path"] else "— no model selected —"
         )
         self._model_lbl.setWordWrap(True)
         self._model_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -314,9 +347,11 @@ class BrainPeelWidget(QWidget):
         )
         if not path_str:
             return
-        self._state["model_path"] = Path(path_str)
+        p = Path(path_str)
+        self._state["model_path"] = p
         self._model_lbl.setText(path_str)
-        self._status(f"Model: {Path(path_str).name}")
+        _save_model_path(p)
+        self._status(f"Model: {p.name}")
 
     def _on_run(self):
         if not self._state["model_path"] or not Path(self._state["model_path"]).exists():
