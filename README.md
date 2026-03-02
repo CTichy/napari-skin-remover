@@ -1,4 +1,4 @@
-# napari-brain-peel
+# napari-skin-remover
 
 A [napari](https://napari.org) plugin for automated 3D brain extraction (skin removal) from zebrafish confocal stacks using a MONAI 3D U-Net.
 
@@ -20,14 +20,14 @@ Given a 3D confocal volume (TIF or IMS), the plugin:
 ## Installation
 
 ```bash
-pip install git+https://github.com/CTichy/napari-brain-peel.git
+pip install git+https://github.com/CTichy/napari-skin-remover.git
 ```
 
 Or clone and install in editable mode:
 
 ```bash
-git clone https://github.com/CTichy/napari-brain-peel.git
-cd napari-brain-peel
+git clone https://github.com/CTichy/napari-skin-remover.git
+cd napari-skin-remover
 pip install -e .
 ```
 
@@ -54,7 +54,7 @@ Create a `models` folder anywhere convenient, for example:
 
 ```
 Documents/
-└── brain-peel-model/
+└── skin-remover-model/
     └── best_model_fullstack_v1_epoch460_dice9573.pth
 ```
 
@@ -70,13 +70,13 @@ Then point the plugin to it using the **Browse (...)** button in the widget. The
 napari
 ```
 
-Then: **Plugins → MONAI Brain Peel**
+Then: **Plugins → MONAI Skin-Remover**
 
 ### CLI
 
 ```bash
-brain-peel path/to/stack.tif
-python -m napari_brain_peel path/to/stack.ims
+skin-remover path/to/stack.tif
+python -m napari_skin_remover path/to/stack.ims
 ```
 
 ### Workflow

@@ -1,5 +1,5 @@
 """
-_widget.py — BrainPeelWidget napari dock panel.
+_widget.py — SkinRemoverWidget napari dock panel.
 """
 
 import json
@@ -21,7 +21,7 @@ from qtpy.QtCore import Qt, QTimer
 from ._io import load_file
 from ._inference import DEFAULT_MODEL, _SKIN_SEG_DIR, run_inference
 
-_CONFIG_PATH = Path.home() / ".config" / "napari-brain-peel" / "config.json"
+_CONFIG_PATH = Path.home() / ".config" / "napari-skin-remover" / "config.json"
 
 
 def _load_saved_model_path():
@@ -54,9 +54,9 @@ def _sep():
     return w
 
 
-class BrainPeelWidget(QWidget):
+class SkinRemoverWidget(QWidget):
     """
-    Napari dock panel for MONAI brain peeling (skin removal).
+    Napari dock panel for MONAI skin removal.
 
     Layout
     ------
@@ -76,7 +76,7 @@ class BrainPeelWidget(QWidget):
     [x] Save brain_only.tif
     [x] Save brain_mask.tif
     ─────────────────────
-    [     Run Brain Peel     ]
+    [     Run Skin-Remover     ]
     Status: Ready
     """
 
@@ -108,7 +108,7 @@ class BrainPeelWidget(QWidget):
         layout = QVBoxLayout()
         layout.setSpacing(6)
 
-        title = QLabel("<b>MONAI Brain Peel</b>")
+        title = QLabel("<b>MONAI Skin-Remover</b>")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
@@ -188,7 +188,7 @@ class BrainPeelWidget(QWidget):
 
         layout.addWidget(_sep())
 
-        self._run_btn = QPushButton("Run Brain Peel")
+        self._run_btn = QPushButton("Run Skin-Remover")
         self._run_btn.setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }")
         layout.addWidget(self._run_btn)
 
@@ -380,7 +380,7 @@ class BrainPeelWidget(QWidget):
         self._status(f"Running on {device} (threshold={threshold:.2f})...")
 
         print(f"\n{'='*70}")
-        print(f"BRAIN PEEL — {stem}  shape={volume.shape}")
+        print(f"SKIN-REMOVER — {stem}  shape={volume.shape}")
         print(f"Model    : {model_path.name}")
         print(f"Threshold: {threshold}   Device: {device}")
         print(f"Erosion  : {erosion_voxels} voxel(s)")
@@ -462,7 +462,7 @@ class BrainPeelWidget(QWidget):
             self._run_btn.setEnabled(True)
 
             print(f"{'='*70}")
-            print("BRAIN PEEL COMPLETE")
+            print("SKIN-REMOVER COMPLETE")
             print(f"{'='*70}\n")
 
         timer.timeout.connect(_poll)

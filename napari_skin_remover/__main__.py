@@ -1,9 +1,9 @@
 """
-__main__.py — CLI entry point for napari_brain_peel.
+__main__.py — CLI entry point for napari_skin_remover.
 
 Usage:
-    python -m napari_brain_peel [file.tif]
-    brain-peel [file.tif]
+    python -m napari_skin_remover [file.tif]
+    skin-remover [file.tif]
 """
 
 import sys
@@ -12,7 +12,7 @@ from pathlib import Path
 
 def main():
     print("=" * 70)
-    print("MONAI BRAIN PEEL — Napari Plugin")
+    print("MONAI SKIN-REMOVER — Napari Plugin")
     print("=" * 70)
 
     # Defer heavy imports — only pay cost when actually launched
@@ -32,16 +32,16 @@ def main():
             sys.exit(1)
 
     import napari
-    from ._widget import BrainPeelWidget
+    from ._widget import SkinRemoverWidget
 
-    viewer = napari.Viewer(title="MONAI Brain Peel")
-    widget = BrainPeelWidget(viewer)
+    viewer = napari.Viewer(title="MONAI Skin-Remover")
+    widget = SkinRemoverWidget(viewer)
 
     if initial_path is not None:
         print(f"\nPre-loading: {initial_path.name}")
         widget.preload(initial_path)
 
-    viewer.window.add_dock_widget(widget, area="right", name="MONAI Brain Peel")
+    viewer.window.add_dock_widget(widget, area="right", name="MONAI Skin-Remover")
 
     print("\nNapari viewer open — use the dock panel on the right.")
     print("=" * 70)
