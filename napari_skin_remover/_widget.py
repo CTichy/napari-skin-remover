@@ -464,10 +464,9 @@ class SkinRemoverWidget(QWidget):
                     vol_proc[protect] = volume[protect]
                     brain_only = (vol_proc * brain_mask).astype(volume.dtype)
                 elif bg_mode == 2:
-                    print("   Filling zeros with background (outside brain mask only)...")
+                    print("   Filling zeros with background (whole stack)...")
                     vol_proc, *_ = fill_zeros_with_background(volume)
-                    protect = brain_mask.astype(bool)
-                    vol_proc[protect] = volume[protect]
+                    # No protection — zeros inside the brain need filling too
                     brain_only = (vol_proc * brain_mask).astype(volume.dtype)
 
                 result["brain_mask"] = brain_mask
