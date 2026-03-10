@@ -20,6 +20,7 @@ from qtpy.QtCore import Qt, QTimer
 
 from ._io import load_file
 from ._inference import DEFAULT_MODEL, _SKIN_SEG_DIR, run_inference
+from ._background import remove_background
 
 _CONFIG_PATH = Path.home() / ".config" / "napari-skin-remover" / "config.json"
 
@@ -179,6 +180,32 @@ class SkinRemoverWidget(QWidget):
 
         layout.addWidget(_sep())
 
+        # Background removal — corner sampling
+        self._bg_cb = QCheckBox("Remove background (corner sampling)")
+        self._bg_cb.setChecked(True)
+        layout.addWidget(self._bg_cb)
+
+        tol_row = QHBoxLayout()
+        tol_row.addWidget(QLabel("  Tolerance (%):"))
+        self._tol_slider = QSlider(Qt.Horizontal)
+        self._tol_slider.setMinimum(1)    # 0.01%
+        self._tol_slider.setMaximum(500)  # 5.00%
+        self._tol_slider.setValue(5)      # 0.05% default
+        self._tol_val = QLabel("0.05")
+        self._tol_val.setFixedWidth(36)
+        tol_row.addWidget(self._tol_slider)
+        tol_row.addWidget(self._tol_val)
+        layout.addLayout(tol_row)
+
+        bg_note = QLabel(
+            "  Samples corners: Z=0-100, Y=0-49, X=0-49\n"
+            "  and Z=0-100, Y=0-49, X=(W-50)-(W-1)"
+        )
+        bg_note.setStyleSheet("color: #aaa; font-size: 10px;")
+        layout.addWidget(bg_note)
+
+        layout.addWidget(_sep())
+
         self._save_only_cb = QCheckBox("Save brain_only.tif")
         self._save_only_cb.setChecked(True)
         self._save_mask_cb = QCheckBox("Save brain_mask.tif")
@@ -211,6 +238,9 @@ class SkinRemoverWidget(QWidget):
         )
         self._erosion_slider.valueChanged.connect(
             lambda v: self._erosion_val.setText(str(v))
+        )
+        self._tol_slider.valueChanged.connect(
+            lambda v: self._tol_val.setText(f"{v / 100:.2f}")
         )
         self._run_btn.clicked.connect(self._on_run)
         self._viewer.layers.events.inserted.connect(self._refresh_layer_info)
@@ -366,11 +396,13 @@ class SkinRemoverWidget(QWidget):
             self._status(f"ERROR: 3D volume required, got {volume.ndim}D {volume.shape}.")
             return
 
-        threshold      = self._thresh_slider.value() / 100.0
-        erosion_voxels = self._erosion_slider.value()
-        model_path     = Path(self._state["model_path"])
-        stem           = target.name
-        file_path      = self._state.get("last_file_path")
+        threshold        = self._thresh_slider.value() / 100.0
+        erosion_voxels   = self._erosion_slider.value()
+        do_bg_removal    = self._bg_cb.isChecked()
+        bg_tolerance_pct = self._tol_slider.value() / 100.0
+        model_path       = Path(self._state["model_path"])
+        stem             = target.name
+        file_path        = self._state.get("last_file_path")
         # Prefer scale directly from the target layer (set by reader or Open btn)
         sc = target.scale
         scale = tuple(float(v) for v in sc) if len(sc) == 3 else self._get_layer_scale()
@@ -389,6 +421,7 @@ class SkinRemoverWidget(QWidget):
         print(f"Model    : {model_path.name}")
         print(f"Threshold: {threshold}   Device: {device}")
         print(f"Erosion  : {erosion_voxels} voxel(s)")
+        print(f"BG removal: {'ON  tol=' + str(bg_tolerance_pct) + '%' if do_bg_removal else 'OFF'}")
         print(f"Scale    : Z={scale[0]:.4f}  Y={scale[1]:.4f}  X={scale[2]:.4f} µm")
         print(f"{'='*70}")
 
@@ -396,8 +429,13 @@ class SkinRemoverWidget(QWidget):
 
         def _worker():
             try:
+                vol = volume
+                if do_bg_removal:
+                    print("   Background removal...")
+                    vol, *_ = remove_background(vol, tolerance_pct=bg_tolerance_pct)
+
                 brain_mask, brain_only = run_inference(
-                    volume, model_path, threshold, device, erosion_voxels
+                    vol, model_path, threshold, device, erosion_voxels
                 )
                 result["brain_mask"] = brain_mask
                 result["brain_only"] = brain_only
