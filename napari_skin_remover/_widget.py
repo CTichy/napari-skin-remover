@@ -14,13 +14,13 @@ import napari
 
 from qtpy.QtWidgets import (
     QPushButton, QLabel, QWidget, QVBoxLayout, QHBoxLayout,
-    QSlider, QCheckBox, QFileDialog, QSizePolicy,
+    QSlider, QCheckBox, QFileDialog, QSizePolicy, QButtonGroup, QRadioButton,
 )
 from qtpy.QtCore import Qt, QTimer
 
 from ._io import load_file
 from ._inference import DEFAULT_MODEL, _SKIN_SEG_DIR, run_inference
-from ._background import remove_background
+from ._background import remove_background, fill_zeros_with_background
 
 _CONFIG_PATH = Path.home() / ".config" / "napari-skin-remover" / "config.json"
 
@@ -180,10 +180,20 @@ class SkinRemoverWidget(QWidget):
 
         layout.addWidget(_sep())
 
-        # Background removal — corner sampling
-        self._bg_cb = QCheckBox("Remove background (corner sampling)")
-        self._bg_cb.setChecked(True)
-        layout.addWidget(self._bg_cb)
+        # Background processing — corner sampling, two modes
+        layout.addWidget(QLabel("Background (corner sampling):"))
+
+        self._bg_group = QButtonGroup(self)
+        self._bg_off_rb   = QRadioButton("Off")
+        self._bg_remove_rb = QRadioButton("Remove background")
+        self._bg_fill_rb  = QRadioButton("Fill zeros with background")
+        self._bg_group.addButton(self._bg_off_rb,    0)
+        self._bg_group.addButton(self._bg_remove_rb, 1)
+        self._bg_group.addButton(self._bg_fill_rb,   2)
+        self._bg_remove_rb.setChecked(True)
+        layout.addWidget(self._bg_off_rb)
+        layout.addWidget(self._bg_remove_rb)
+        layout.addWidget(self._bg_fill_rb)
 
         tol_row = QHBoxLayout()
         tol_row.addWidget(QLabel("  Tolerance (%):"))
@@ -198,8 +208,9 @@ class SkinRemoverWidget(QWidget):
         layout.addLayout(tol_row)
 
         bg_note = QLabel(
-            "  Samples corners: Z=0-100, Y=0-49, X=0-49\n"
-            "  and Z=0-100, Y=0-49, X=(W-50)-(W-1)"
+            "  Corners: Z=0-100, Y=0-49, X=0-49\n"
+            "  and Z=0-100, Y=0-49, X=(W-50)-(W-1)\n"
+            "  (Tolerance only used in Remove mode)"
         )
         bg_note.setStyleSheet("color: #aaa; font-size: 10px;")
         layout.addWidget(bg_note)
@@ -242,6 +253,7 @@ class SkinRemoverWidget(QWidget):
         self._tol_slider.valueChanged.connect(
             lambda v: self._tol_val.setText(f"{v / 100:.2f}")
         )
+        self._bg_group.buttonClicked.connect(self._on_bg_mode_changed)
         self._run_btn.clicked.connect(self._on_run)
         self._viewer.layers.events.inserted.connect(self._refresh_layer_info)
         self._viewer.layers.events.removed.connect(self._refresh_layer_info)
@@ -253,6 +265,12 @@ class SkinRemoverWidget(QWidget):
 
     def _status(self, msg):
         self._status_lbl.setText(f"Status: {msg}")
+
+    def _on_bg_mode_changed(self, btn):
+        """Enable tolerance slider only in Remove mode."""
+        remove_mode = self._bg_remove_rb.isChecked()
+        self._tol_slider.setEnabled(remove_mode)
+        self._tol_val.setEnabled(remove_mode)
 
     def _get_layer_scale(self):
         """
@@ -398,7 +416,7 @@ class SkinRemoverWidget(QWidget):
 
         threshold        = self._thresh_slider.value() / 100.0
         erosion_voxels   = self._erosion_slider.value()
-        do_bg_removal    = self._bg_cb.isChecked()
+        bg_mode          = self._bg_group.checkedId()  # 0=off, 1=remove, 2=fill
         bg_tolerance_pct = self._tol_slider.value() / 100.0
         model_path       = Path(self._state["model_path"])
         stem             = target.name
@@ -421,7 +439,8 @@ class SkinRemoverWidget(QWidget):
         print(f"Model    : {model_path.name}")
         print(f"Threshold: {threshold}   Device: {device}")
         print(f"Erosion  : {erosion_voxels} voxel(s)")
-        print(f"BG removal: {'ON  tol=' + str(bg_tolerance_pct) + '%' if do_bg_removal else 'OFF'}")
+        bg_mode_str = {0: "OFF", 1: f"Remove (tol={bg_tolerance_pct}%)", 2: "Fill zeros"}[bg_mode]
+        print(f"BG mode  : {bg_mode_str}")
         print(f"Scale    : Z={scale[0]:.4f}  Y={scale[1]:.4f}  X={scale[2]:.4f} µm")
         print(f"{'='*70}")
 
@@ -434,18 +453,22 @@ class SkinRemoverWidget(QWidget):
                     volume, model_path, threshold, device, erosion_voxels
                 )
 
-                # Step 2: background removal AFTER inference, outside brain only.
-                # Pixels inside the brain mask are protected so blob holes cannot form.
-                if do_bg_removal:
+                # Step 2: background processing AFTER inference, outside brain only.
+                # Pixels inside the brain mask are always protected.
+                if bg_mode == 1:
                     print("   Background removal (outside brain mask only)...")
-                    vol_clean, *_ = remove_background(
+                    vol_proc, *_ = remove_background(
                         volume, tolerance_pct=bg_tolerance_pct
                     )
-                    # Restore original values everywhere the brain mask is active
                     protect = brain_mask.astype(bool)
-                    vol_clean[protect] = volume[protect]
-                    # Recompute brain_only from the cleaned volume
-                    brain_only = (vol_clean * brain_mask).astype(volume.dtype)
+                    vol_proc[protect] = volume[protect]
+                    brain_only = (vol_proc * brain_mask).astype(volume.dtype)
+                elif bg_mode == 2:
+                    print("   Filling zeros with background (outside brain mask only)...")
+                    vol_proc, *_ = fill_zeros_with_background(volume)
+                    protect = brain_mask.astype(bool)
+                    vol_proc[protect] = volume[protect]
+                    brain_only = (vol_proc * brain_mask).astype(volume.dtype)
 
                 result["brain_mask"] = brain_mask
                 result["brain_only"] = brain_only
