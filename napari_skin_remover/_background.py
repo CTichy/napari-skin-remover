@@ -68,7 +68,7 @@ def remove_outside_brain(
     volume: np.ndarray,
     brain_mask: np.ndarray,
     corner_xy: int = 50,
-    corner_z: int = 50,
+    corner_z: int = 101,
     tolerance_pct: float = 0.05,
 ):
     """
@@ -99,7 +99,7 @@ def remove_outside_brain(
 def remove_global(
     volume: np.ndarray,
     corner_xy: int = 50,
-    corner_z: int = 50,
+    corner_z: int = 101,
     tolerance_pct: float = 0.05,
 ):
     """
