@@ -15,6 +15,7 @@ import napari
 from qtpy.QtWidgets import (
     QPushButton, QLabel, QWidget, QVBoxLayout, QHBoxLayout,
     QSlider, QCheckBox, QFileDialog, QSizePolicy, QButtonGroup, QRadioButton,
+    QTabWidget,
 )
 from qtpy.QtCore import Qt, QTimer
 
@@ -107,19 +108,21 @@ class SkinRemoverWidget(QWidget):
     # ------------------------------------------------------------------ #
 
     def _build_ui(self):
-        layout = QVBoxLayout()
-        layout.setSpacing(6)
+        tabs = QTabWidget()
 
-        title = QLabel("<b>MONAI Skin-Remover</b>")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        # ============================================================ #
+        # TAB 1 — Skin Remover
+        # ============================================================ #
+        tab1 = QWidget()
+        t1 = QVBoxLayout()
+        t1.setSpacing(6)
 
         self._open_btn = QPushButton("Open TIF / IMS file")
-        layout.addWidget(self._open_btn)
+        t1.addWidget(self._open_btn)
 
-        layout.addWidget(_sep())
+        t1.addWidget(_sep())
 
-        layout.addWidget(QLabel("Model (.pth):"))
+        t1.addWidget(QLabel("Model (.pth):"))
         model_row = QHBoxLayout()
         self._model_lbl = QLabel(
             str(self._state["model_path"]) if self._state["model_path"] else "— no model selected —"
@@ -130,23 +133,23 @@ class SkinRemoverWidget(QWidget):
         self._model_browse_btn.setFixedWidth(32)
         model_row.addWidget(self._model_lbl)
         model_row.addWidget(self._model_browse_btn)
-        layout.addLayout(model_row)
+        t1.addLayout(model_row)
 
-        layout.addWidget(_sep())
+        t1.addWidget(_sep())
 
-        layout.addWidget(QLabel("Input: active (selected) layer"))
+        t1.addWidget(QLabel("Input: active (selected) layer"))
         self._layer_info = QLabel("  — no layers yet —")
         self._layer_info.setWordWrap(True)
-        layout.addWidget(self._layer_info)
+        t1.addWidget(self._layer_info)
 
-        layout.addWidget(_sep())
+        t1.addWidget(_sep())
 
         self._meta_lbl = QLabel("  — voxel info unavailable —")
         self._meta_lbl.setWordWrap(True)
         self._meta_lbl.setStyleSheet("color: #aaa; font-size: 10px;")
-        layout.addWidget(self._meta_lbl)
+        t1.addWidget(self._meta_lbl)
 
-        layout.addWidget(_sep())
+        t1.addWidget(_sep())
 
         thresh_row = QHBoxLayout()
         thresh_row.addWidget(QLabel("Threshold:"))
@@ -158,9 +161,8 @@ class SkinRemoverWidget(QWidget):
         self._thresh_val.setFixedWidth(36)
         thresh_row.addWidget(self._thresh_slider)
         thresh_row.addWidget(self._thresh_val)
-        layout.addLayout(thresh_row)
+        t1.addLayout(thresh_row)
 
-        # Erosion slider — strips skin rim from brain_only output
         erosion_row = QHBoxLayout()
         erosion_row.addWidget(QLabel("Erosion (vox):"))
         self._erosion_slider = QSlider(Qt.Horizontal)
@@ -171,19 +173,17 @@ class SkinRemoverWidget(QWidget):
         self._erosion_val.setFixedWidth(24)
         erosion_row.addWidget(self._erosion_slider)
         erosion_row.addWidget(self._erosion_val)
-        layout.addLayout(erosion_row)
+        t1.addLayout(erosion_row)
         erosion_note = QLabel(
             "  Erodes mask before applying to brain_only\n"
             "  (raw brain_mask is always saved un-eroded)"
         )
         erosion_note.setStyleSheet("color: #aaa; font-size: 10px;")
-        layout.addWidget(erosion_note)
+        t1.addWidget(erosion_note)
 
-        layout.addWidget(_sep())
+        t1.addWidget(_sep())
 
-        # Background processing — left-side corner sampling, three modes
-        layout.addWidget(QLabel("Background (brain mode):"))
-
+        t1.addWidget(QLabel("Background (brain mode):"))
         self._bg_group = QButtonGroup(self)
         self._bg_off_rb    = QRadioButton("Off")
         self._bg_mode1_rb  = QRadioButton("1 — Remove background outside brain (inference)")
@@ -194,127 +194,138 @@ class SkinRemoverWidget(QWidget):
         self._bg_group.addButton(self._bg_mode2_rb, 2)
         self._bg_group.addButton(self._bg_mode3_rb, 3)
         self._bg_off_rb.setChecked(True)
-        layout.addWidget(self._bg_off_rb)
-        layout.addWidget(self._bg_mode1_rb)
-        layout.addWidget(self._bg_mode2_rb)
-        layout.addWidget(self._bg_mode3_rb)
+        t1.addWidget(self._bg_off_rb)
+        t1.addWidget(self._bg_mode1_rb)
+        t1.addWidget(self._bg_mode2_rb)
+        t1.addWidget(self._bg_mode3_rb)
 
         tol_row = QHBoxLayout()
         self._tol_lbl = QLabel("  Tolerance (%):")
         tol_row.addWidget(self._tol_lbl)
         self._tol_slider = QSlider(Qt.Horizontal)
-        self._tol_slider.setMinimum(-100)  # -1.00%
-        self._tol_slider.setMaximum(100)   # +1.00%
-        self._tol_slider.setValue(50)      # +0.50% default
-        self._tol_val = QLabel("+0.05")
+        self._tol_slider.setMinimum(-100)
+        self._tol_slider.setMaximum(100)
+        self._tol_slider.setValue(50)
+        self._tol_val = QLabel("+0.50")
         self._tol_val.setFixedWidth(42)
         tol_row.addWidget(self._tol_slider)
         tol_row.addWidget(self._tol_val)
-        layout.addLayout(tol_row)
+        t1.addLayout(tol_row)
 
         bg_note = QLabel(
             "  Probe: inside-brain mode (post-inference)\n"
             "  Mode 1 & 2 use tolerance  |  Mode 3: no tolerance"
         )
         bg_note.setStyleSheet("color: #aaa; font-size: 10px;")
-        layout.addWidget(bg_note)
+        t1.addWidget(bg_note)
 
-        layout.addWidget(_sep())
+        t1.addWidget(_sep())
 
         self._save_only_cb = QCheckBox("Save brain_only.tif")
         self._save_only_cb.setChecked(True)
         self._save_mask_cb = QCheckBox("Save brain_mask.tif")
         self._save_mask_cb.setChecked(True)
-        layout.addWidget(self._save_only_cb)
-        layout.addWidget(self._save_mask_cb)
+        t1.addWidget(self._save_only_cb)
+        t1.addWidget(self._save_mask_cb)
 
-        layout.addWidget(_sep())
+        t1.addWidget(_sep())
 
         self._run_btn = QPushButton("Run Skin-Remover")
         self._run_btn.setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }")
-        layout.addWidget(self._run_btn)
+        t1.addWidget(self._run_btn)
 
         self._status_lbl = QLabel("Status: Ready")
         self._status_lbl.setWordWrap(True)
-        layout.addWidget(self._status_lbl)
+        t1.addWidget(self._status_lbl)
 
-        layout.addWidget(_sep())
+        t1.addStretch()
+        tab1.setLayout(t1)
+        tabs.addTab(tab1, "Skin Remover")
 
-        # ── Create Labels ──────────────────────────────────────────── #
-        lbl_title = QLabel("<b>Create 3D Labels</b>")
-        lbl_title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(lbl_title)
+        # ============================================================ #
+        # TAB 2 — Create Labels
+        # ============================================================ #
+        tab2 = QWidget()
+        t2 = QVBoxLayout()
+        t2.setSpacing(6)
 
         lbl_note = QLabel(
-            "  Reads active brain_only layer (run option 2 first).\n"
-            "  Smooths contours, labels 2D blobs per slice,\n"
-            "  links across slices by overlap."
+            "Run option 2 (Remove globally) first to get a\n"
+            "brain_only layer, then select it and click below."
         )
+        lbl_note.setWordWrap(True)
         lbl_note.setStyleSheet("color: #aaa; font-size: 10px;")
-        layout.addWidget(lbl_note)
+        t2.addWidget(lbl_note)
 
-        # σ XY
+        t2.addWidget(_sep())
+
         sxy_row = QHBoxLayout()
-        sxy_row.addWidget(QLabel("  Smooth σ XY:"))
+        sxy_row.addWidget(QLabel("Smooth σ XY:"))
         self._sxy_slider = QSlider(Qt.Horizontal)
         self._sxy_slider.setMinimum(0)
-        self._sxy_slider.setMaximum(50)   # 0.0–5.0, step 0.1
-        self._sxy_slider.setValue(10)     # default 1.0
+        self._sxy_slider.setMaximum(50)
+        self._sxy_slider.setValue(10)
         self._sxy_val = QLabel("1.0")
         self._sxy_val.setFixedWidth(28)
         sxy_row.addWidget(self._sxy_slider)
         sxy_row.addWidget(self._sxy_val)
-        layout.addLayout(sxy_row)
+        t2.addLayout(sxy_row)
 
-        # σ Z
         sz_row = QHBoxLayout()
-        sz_row.addWidget(QLabel("  Smooth σ Z:"))
+        sz_row.addWidget(QLabel("Smooth σ Z:"))
         self._sz_slider = QSlider(Qt.Horizontal)
         self._sz_slider.setMinimum(0)
         self._sz_slider.setMaximum(50)
-        self._sz_slider.setValue(5)       # default 0.5
+        self._sz_slider.setValue(5)
         self._sz_val = QLabel("0.5")
         self._sz_val.setFixedWidth(28)
         sz_row.addWidget(self._sz_slider)
         sz_row.addWidget(self._sz_val)
-        layout.addLayout(sz_row)
+        t2.addLayout(sz_row)
 
-        # Min overlap %
         ovlp_row = QHBoxLayout()
-        ovlp_row.addWidget(QLabel("  Min overlap (%):"))
+        ovlp_row.addWidget(QLabel("Min overlap (%):"))
         self._ovlp_slider = QSlider(Qt.Horizontal)
         self._ovlp_slider.setMinimum(1)
         self._ovlp_slider.setMaximum(100)
-        self._ovlp_slider.setValue(10)    # default 10%
+        self._ovlp_slider.setValue(10)
         self._ovlp_val = QLabel("10")
         self._ovlp_val.setFixedWidth(28)
         ovlp_row.addWidget(self._ovlp_slider)
         ovlp_row.addWidget(self._ovlp_val)
-        layout.addLayout(ovlp_row)
+        t2.addLayout(ovlp_row)
 
-        # Min blob area
         area_row = QHBoxLayout()
-        area_row.addWidget(QLabel("  Min blob area (px²):"))
+        area_row.addWidget(QLabel("Min blob area (px²):"))
         self._area_slider = QSlider(Qt.Horizontal)
         self._area_slider.setMinimum(1)
         self._area_slider.setMaximum(500)
-        self._area_slider.setValue(50)    # default 50 px²
+        self._area_slider.setValue(50)
         self._area_val = QLabel("50")
         self._area_val.setFixedWidth(28)
         area_row.addWidget(self._area_slider)
         area_row.addWidget(self._area_val)
-        layout.addLayout(area_row)
+        t2.addLayout(area_row)
+
+        t2.addWidget(_sep())
 
         self._labels_btn = QPushButton("Create Labels")
-        self._labels_btn.setStyleSheet("QPushButton { padding: 5px; }")
-        layout.addWidget(self._labels_btn)
+        self._labels_btn.setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }")
+        t2.addWidget(self._labels_btn)
 
         self._labels_status_lbl = QLabel("")
         self._labels_status_lbl.setWordWrap(True)
-        layout.addWidget(self._labels_status_lbl)
+        t2.addWidget(self._labels_status_lbl)
 
-        layout.addStretch()
-        self.setLayout(layout)
+        t2.addStretch()
+        tab2.setLayout(t2)
+        tabs.addTab(tab2, "Create Labels")
+
+        # ── outer layout ────────────────────────────────────────────── #
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(tabs)
+        self.setLayout(outer)
 
     # ------------------------------------------------------------------ #
     # Signal connections
