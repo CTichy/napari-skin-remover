@@ -181,7 +181,7 @@ class SkinRemoverWidget(QWidget):
         layout.addWidget(_sep())
 
         # Background processing — left-side corner sampling, three modes
-        layout.addWidget(QLabel("Background (brain mode ± 10%):"))
+        layout.addWidget(QLabel("Background (brain mode):"))
 
         self._bg_group = QButtonGroup(self)
         self._bg_off_rb    = QRadioButton("Off")
@@ -212,7 +212,7 @@ class SkinRemoverWidget(QWidget):
         layout.addLayout(tol_row)
 
         bg_note = QLabel(
-            "  Probe: inside-brain mode ± 10% (post-inference)\n"
+            "  Probe: inside-brain mode (post-inference)\n"
             "  Mode 1 & 2 use tolerance  |  Mode 3: no tolerance"
         )
         bg_note.setStyleSheet("color: #aaa; font-size: 10px;")
