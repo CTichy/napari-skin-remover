@@ -181,7 +181,7 @@ class SkinRemoverWidget(QWidget):
         layout.addWidget(_sep())
 
         # Background processing — left-side corner sampling, three modes
-        layout.addWidget(QLabel("Background (left-side corners):"))
+        layout.addWidget(QLabel("Background (stack median ± 10%):"))
 
         self._bg_group = QButtonGroup(self)
         self._bg_off_rb    = QRadioButton("Off")
@@ -212,8 +212,7 @@ class SkinRemoverWidget(QWidget):
         layout.addLayout(tol_row)
 
         bg_note = QLabel(
-            "  Corners: top-left (Y=0-49, X=0-49, Z=0-49)\n"
-            "  and bottom-left (Y=H-50..H, X=0-49, Z=0-49)\n"
+            "  Probe: full stack median ± 10%\n"
             "  Mode 1 & 2 use tolerance  |  Mode 3: no tolerance"
         )
         bg_note.setStyleSheet("color: #aaa; font-size: 10px;")
@@ -466,20 +465,16 @@ class SkinRemoverWidget(QWidget):
 
                 # Step 2: optional background processing
                 if bg_mode == 1:
-                    # Remove background outside brain only — brain interior protected
                     vol_proc, *_ = remove_outside_brain(
                         volume, brain_mask, tolerance_pct=bg_tolerance_pct
                     )
                     brain_only = (vol_proc * brain_mask).astype(volume.dtype)
                 elif bg_mode == 2:
-                    # Remove background globally across the full stack
                     vol_proc, *_ = remove_global(
                         volume, tolerance_pct=bg_tolerance_pct
                     )
                     brain_only = (vol_proc * brain_mask).astype(volume.dtype)
                 elif bg_mode == 3:
-                    # Fill outside-brain pixels (zeroed by skin removal) with
-                    # random corner samples — brain interior untouched
                     brain_only, _ = fill_outside_brain_random(
                         volume, brain_mask
                     )

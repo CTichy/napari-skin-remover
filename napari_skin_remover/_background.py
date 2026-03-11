@@ -1,48 +1,49 @@
 """
-_background.py — Corner-based background processing.
+_background.py — Median-based background processing.
 
-Samples two left-side corners of the stack to estimate the background
-intensity ceiling (bg_max). All three modes use a single-sided threshold:
+Background is estimated as the median of the full stack ± 10%.
+Since background occupies the majority of the volume, the median
+naturally falls within the background intensity range.
+
+  bg_median = median(full stack)
+  bg_min    = bg_median * 0.90
+  bg_max    = bg_median * 1.10
+
+All three modes use a single-sided threshold:
 
   threshold = bg_max + tolerance
 
   pixels <= threshold  →  treated as background
   pixels >  threshold  →  treated as signal (kept)
 
-Corner regions sampled (both on left side, X=0..corner_xy):
-  Top-left    : Z=0..corner_z,  Y=0..corner_xy,      X=0..corner_xy
-  Bottom-left : Z=0..corner_z,  Y=H-corner_xy..H,    X=0..corner_xy
-
 Three processing modes:
   1. remove_outside_brain  — inference-guided: zero background pixels
                              outside the brain mask only
   2. remove_global         — zero all background pixels in the full stack
-  3. fill_random_background— replace background pixels with random samples
-                             drawn from the corner pixel distribution
+  3. fill_outside_brain    — fill outside-brain pixels with random samples
+                             drawn from the background pixel distribution
 """
 
 import numpy as np
 
 
-def _sample_corners(volume, corner_xy=50, corner_z=50):
+def _estimate_background(volume):
     """
-    Return flat array of all pixel values from the two left-side corners.
+    Estimate background from the full stack median ± 10%.
 
-    Top-left    : Z=0..corner_z,  Y=0..corner_xy,      X=0..corner_xy
-    Bottom-left : Z=0..corner_z,  Y=H-corner_xy..H,    X=0..corner_xy
+    Returns bg_values (pool of background pixels), bg_median, bg_min, bg_max.
     """
-    Z, Y, X = volume.shape
-    z_end       = min(corner_z, Z)
-    y_end       = min(corner_xy, Y)
-    x_end       = min(corner_xy, X)
-    y_start_bot = max(0, Y - corner_xy)
+    bg_median = float(np.median(volume))
+    bg_min    = bg_median * 0.90
+    bg_max    = bg_median * 1.10
+    bg_values = volume[(volume >= bg_min) & (volume <= bg_max)].ravel()
+    print(f"   Background probe: median={bg_median:.2f}"
+          f"  range=[{bg_min:.2f}, {bg_max:.2f}]"
+          f"  ({len(bg_values):,} voxels = {100.*len(bg_values)/volume.size:.1f}% of stack)")
+    return bg_values, bg_median, bg_min, bg_max
 
-    corner_tl = volume[:z_end, :y_end,       :x_end]
-    corner_bl = volume[:z_end, y_start_bot:, :x_end]
-    return np.concatenate([corner_tl.ravel(), corner_bl.ravel()])
 
-
-def _threshold(volume, corner_xy=50, corner_z=50, tolerance_pct=0.05):
+def _threshold(volume, tolerance_pct=0.05):
     """
     Compute the background threshold and background mask.
 
@@ -51,8 +52,7 @@ def _threshold(volume, corner_xy=50, corner_z=50, tolerance_pct=0.05):
 
     Returns bg_values, bg_max, threshold, bg_mask
     """
-    bg_values  = _sample_corners(volume, corner_xy, corner_z)
-    bg_max     = float(bg_values.max())
+    bg_values, bg_median, bg_min, bg_max = _estimate_background(volume)
     data_range = float(volume.max()) - float(volume.min())
     tol        = data_range * (tolerance_pct / 100.0)
     thresh     = bg_max + tol
@@ -67,23 +67,18 @@ def _threshold(volume, corner_xy=50, corner_z=50, tolerance_pct=0.05):
 def remove_outside_brain(
     volume: np.ndarray,
     brain_mask: np.ndarray,
-    corner_xy: int = 50,
-    corner_z: int = 50,
     tolerance_pct: float = 0.05,
 ):
     """
     Zero background pixels OUTSIDE the brain mask.
     Pixels inside the brain are always preserved.
     """
-    bg_values, bg_max, thresh, bg_mask = _threshold(
-        volume, corner_xy, corner_z, tolerance_pct
-    )
-    outside  = ~brain_mask.astype(bool)
-    to_zero  = outside & bg_mask
+    bg_values, bg_max, thresh, bg_mask = _threshold(volume, tolerance_pct)
+    outside   = ~brain_mask.astype(bool)
+    to_zero   = outside & bg_mask
     n_removed = int(to_zero.sum())
 
-    print(f"   Background ceiling (corners): {bg_max:.1f}"
-          f"  tol={tolerance_pct:+.3f}%  →  threshold={thresh:.1f}")
+    print(f"   Threshold: {thresh:.2f}  (tol={tolerance_pct:+.3f}%)")
     print(f"   Removed {n_removed:,} outside-brain background voxels"
           f"  ({100.*n_removed/volume.size:.1f}% of stack)")
 
@@ -98,8 +93,6 @@ def remove_outside_brain(
 
 def remove_global(
     volume: np.ndarray,
-    corner_xy: int = 50,
-    corner_z: int = 50,
     tolerance_pct: float = 0.05,
 ):
     """
@@ -107,13 +100,10 @@ def remove_global(
     Negative tolerance shrinks the threshold (removes less),
     positive tolerance raises it (removes more).
     """
-    bg_values, bg_max, thresh, bg_mask = _threshold(
-        volume, corner_xy, corner_z, tolerance_pct
-    )
+    bg_values, bg_max, thresh, bg_mask = _threshold(volume, tolerance_pct)
     n_removed = int(bg_mask.sum())
 
-    print(f"   Background ceiling (corners): {bg_max:.1f}"
-          f"  tol={tolerance_pct:+.3f}%  →  threshold={thresh:.1f}")
+    print(f"   Threshold: {thresh:.2f}  (tol={tolerance_pct:+.3f}%)")
     print(f"   Removed {n_removed:,} voxels globally"
           f"  ({100.*n_removed/volume.size:.1f}% of stack)")
 
@@ -123,46 +113,38 @@ def remove_global(
 
 
 # ------------------------------------------------------------------ #
-# Mode 3 — random background fill (whole stack)
+# Mode 3 — random background fill (outside brain only)
 # ------------------------------------------------------------------ #
 
 def fill_outside_brain_random(
     volume: np.ndarray,
     brain_mask: np.ndarray,
-    corner_xy: int = 50,
-    corner_z: int = 50,
 ):
     """
     Fill all pixels zeroed by skin removal (outside the brain mask) with
-    random samples drawn from the corner pixel distribution.
+    random samples drawn from the background pixel distribution
+    (median ± 10%, Gaussian-filtered at ±2σ to remove outliers).
 
     Inside brain  → original pixel values preserved
-    Outside brain → random samples from corner background distribution
-
-    No intensity threshold is used — the brain mask defines what gets filled.
+    Outside brain → random samples from background distribution
     """
-    bg_values = _sample_corners(volume, corner_xy, corner_z)
+    bg_values, bg_median, bg_min, bg_max = _estimate_background(volume)
 
-    outside  = ~brain_mask.astype(bool)
-    n_filled = int(outside.sum())
-
-    print(f"   Corner samples: {len(bg_values):,}"
-          f"  (min={bg_values.min():.1f}  max={bg_values.max():.1f}"
-          f"  mean={bg_values.mean():.1f})")
-    print(f"   Filling {n_filled:,} outside-brain voxels with random noise"
-          f"  ({100.*n_filled/volume.size:.1f}% of stack)")
-
-    # Fit Gaussian to corner values, remove outliers beyond ±2σ
+    # Gaussian filter: remove outliers beyond ±2σ from the bg pool
     mu    = float(bg_values.mean())
     sigma = float(bg_values.std())
     bg_pool = bg_values[np.abs(bg_values - mu) <= 2.0 * sigma]
+    print(f"   Fill pool Gaussian: μ={mu:.2f}  σ={sigma:.2f}"
+          f"  →  [{mu-2*sigma:.1f}, {mu+2*sigma:.1f}]"
+          f"  ({len(bg_pool):,} / {len(bg_values):,} kept)")
 
-    print(f"   Corner Gaussian: μ={mu:.2f}  σ={sigma:.2f}"
-          f"  →  pool [{mu-2*sigma:.1f}, {mu+2*sigma:.1f}]"
-          f"  ({len(bg_pool):,} / {len(bg_values):,} samples kept)")
+    outside  = ~brain_mask.astype(bool)
+    n_filled = int(outside.sum())
+    print(f"   Filling {n_filled:,} outside-brain voxels with random noise"
+          f"  ({100.*n_filled/volume.size:.1f}% of stack)")
 
     result = volume.copy()
-    if n_filled > 0:
+    if n_filled > 0 and len(bg_pool) > 0:
         random_fill = np.random.choice(bg_pool, size=n_filled, replace=True)
         result[outside] = random_fill.astype(volume.dtype)
     return result, n_filled
