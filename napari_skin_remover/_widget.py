@@ -181,7 +181,7 @@ class SkinRemoverWidget(QWidget):
         layout.addWidget(_sep())
 
         # Background processing — left-side corner sampling, three modes
-        layout.addWidget(QLabel("Background (stack median ± 10%):"))
+        layout.addWidget(QLabel("Background (brain median ± 10%):"))
 
         self._bg_group = QButtonGroup(self)
         self._bg_off_rb    = QRadioButton("Off")
@@ -212,7 +212,7 @@ class SkinRemoverWidget(QWidget):
         layout.addLayout(tol_row)
 
         bg_note = QLabel(
-            "  Probe: full stack median ± 10%\n"
+            "  Probe: inside-brain median ± 10% (post-inference)\n"
             "  Mode 1 & 2 use tolerance  |  Mode 3: no tolerance"
         )
         bg_note.setStyleSheet("color: #aaa; font-size: 10px;")
@@ -471,7 +471,7 @@ class SkinRemoverWidget(QWidget):
                     brain_only = (vol_proc * brain_mask).astype(volume.dtype)
                 elif bg_mode == 2:
                     vol_proc, *_ = remove_global(
-                        volume, tolerance_pct=bg_tolerance_pct
+                        volume, brain_mask, tolerance_pct=bg_tolerance_pct
                     )
                     brain_only = (vol_proc * brain_mask).astype(volume.dtype)
                 elif bg_mode == 3:

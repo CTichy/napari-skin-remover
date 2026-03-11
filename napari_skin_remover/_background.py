@@ -27,23 +27,27 @@ Three processing modes:
 import numpy as np
 
 
-def _estimate_background(volume):
+def _estimate_background(volume, brain_mask):
     """
-    Estimate background from the full stack median ± 10%.
+    Estimate background from the median of brain pixels (post-skin-removal) ± 10%.
+
+    Only pixels inside the brain mask are used for the probe, giving a clean
+    estimate of the background within the brain region.
 
     Returns bg_values (pool of background pixels), bg_median, bg_min, bg_max.
     """
-    bg_median = float(np.median(volume))
-    bg_min    = bg_median * 0.90
-    bg_max    = bg_median * 1.10
-    bg_values = volume[(volume >= bg_min) & (volume <= bg_max)].ravel()
-    print(f"   Background probe: median={bg_median:.2f}"
+    brain_pixels = volume[brain_mask.astype(bool)].ravel()
+    bg_median    = float(np.median(brain_pixels))
+    bg_min       = bg_median * 0.90
+    bg_max       = bg_median * 1.10
+    bg_values    = brain_pixels[(brain_pixels >= bg_min) & (brain_pixels <= bg_max)]
+    print(f"   Background probe (inside brain): median={bg_median:.2f}"
           f"  range=[{bg_min:.2f}, {bg_max:.2f}]"
           f"  ({len(bg_values):,} voxels = {100.*len(bg_values)/volume.size:.1f}% of stack)")
     return bg_values, bg_median, bg_min, bg_max
 
 
-def _threshold(volume, tolerance_pct=0.05):
+def _threshold(volume, brain_mask, tolerance_pct=0.05):
     """
     Compute the background threshold and background mask.
 
@@ -52,7 +56,7 @@ def _threshold(volume, tolerance_pct=0.05):
 
     Returns bg_values, bg_max, threshold, bg_mask
     """
-    bg_values, bg_median, bg_min, bg_max = _estimate_background(volume)
+    bg_values, bg_median, bg_min, bg_max = _estimate_background(volume, brain_mask)
     data_range = float(volume.max()) - float(volume.min())
     tol        = data_range * (tolerance_pct / 100.0)
     thresh     = bg_max + tol
@@ -73,7 +77,7 @@ def remove_outside_brain(
     Zero background pixels OUTSIDE the brain mask.
     Pixels inside the brain are always preserved.
     """
-    bg_values, bg_max, thresh, bg_mask = _threshold(volume, tolerance_pct)
+    bg_values, bg_max, thresh, bg_mask = _threshold(volume, brain_mask, tolerance_pct)
     outside   = ~brain_mask.astype(bool)
     to_zero   = outside & bg_mask
     n_removed = int(to_zero.sum())
@@ -93,6 +97,7 @@ def remove_outside_brain(
 
 def remove_global(
     volume: np.ndarray,
+    brain_mask: np.ndarray,
     tolerance_pct: float = 0.05,
 ):
     """
@@ -100,7 +105,7 @@ def remove_global(
     Negative tolerance shrinks the threshold (removes less),
     positive tolerance raises it (removes more).
     """
-    bg_values, bg_max, thresh, bg_mask = _threshold(volume, tolerance_pct)
+    bg_values, bg_max, thresh, bg_mask = _threshold(volume, brain_mask, tolerance_pct)
     n_removed = int(bg_mask.sum())
 
     print(f"   Threshold: {thresh:.2f}  (tol={tolerance_pct:+.3f}%)")
@@ -128,7 +133,7 @@ def fill_outside_brain_random(
     Inside brain  → original pixel values preserved
     Outside brain → random samples from background distribution
     """
-    bg_values, bg_median, bg_min, bg_max = _estimate_background(volume)
+    bg_values, bg_median, bg_min, bg_max = _estimate_background(volume, brain_mask)
 
     # Gaussian filter: remove outliers beyond ±2σ from the bg pool
     mu    = float(bg_values.mean())
