@@ -152,8 +152,17 @@ def fill_outside_brain_random(
     print(f"   Filling {n_filled:,} outside-brain voxels with random noise"
           f"  ({100.*n_filled/volume.size:.1f}% of stack)")
 
+    # Fit Gaussian to corner values, remove outliers beyond ±2σ
+    mu    = float(bg_values.mean())
+    sigma = float(bg_values.std())
+    bg_pool = bg_values[np.abs(bg_values - mu) <= 2.0 * sigma]
+
+    print(f"   Corner Gaussian: μ={mu:.2f}  σ={sigma:.2f}"
+          f"  →  pool [{mu-2*sigma:.1f}, {mu+2*sigma:.1f}]"
+          f"  ({len(bg_pool):,} / {len(bg_values):,} samples kept)")
+
     result = volume.copy()
     if n_filled > 0:
-        random_fill = np.random.choice(bg_values, size=n_filled, replace=True)
+        random_fill = np.random.choice(bg_pool, size=n_filled, replace=True)
         result[outside] = random_fill.astype(volume.dtype)
     return result, n_filled
