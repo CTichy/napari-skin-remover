@@ -126,32 +126,34 @@ def remove_global(
 # Mode 3 — random background fill (whole stack)
 # ------------------------------------------------------------------ #
 
-def fill_random_background(
+def fill_outside_brain_random(
     volume: np.ndarray,
+    brain_mask: np.ndarray,
     corner_xy: int = 50,
     corner_z: int = 101,
-    tolerance_pct: float = 0.05,
 ):
     """
-    Replace all background pixels with random samples drawn from the
-    actual corner pixel distribution.
+    Fill all pixels zeroed by skin removal (outside the brain mask) with
+    random samples drawn from the corner pixel distribution.
 
-    Uses random sampling (not mean) so the filled regions match the
-    natural texture/noise of the scanner background.
+    Inside brain  → original pixel values preserved
+    Outside brain → random samples from corner background distribution
+
+    No intensity threshold is used — the brain mask defines what gets filled.
     """
-    bg_values, bg_max, thresh, bg_mask = _threshold(
-        volume, corner_xy, corner_z, tolerance_pct
-    )
-    n_filled = int(bg_mask.sum())
+    bg_values = _sample_corners(volume, corner_xy, corner_z)
 
-    print(f"   Background ceiling (corners): {bg_max:.1f}"
-          f"  tol={tolerance_pct:+.3f}%  →  threshold={thresh:.1f}")
-    print(f"   Filling {n_filled:,} background voxels with random noise"
-          f"  ({100.*n_filled/volume.size:.1f}% of stack)"
-          f"  from {len(bg_values):,} corner samples")
+    outside  = ~brain_mask.astype(bool)
+    n_filled = int(outside.sum())
+
+    print(f"   Corner samples: {len(bg_values):,}"
+          f"  (min={bg_values.min():.1f}  max={bg_values.max():.1f}"
+          f"  mean={bg_values.mean():.1f})")
+    print(f"   Filling {n_filled:,} outside-brain voxels with random noise"
+          f"  ({100.*n_filled/volume.size:.1f}% of stack)")
 
     result = volume.copy()
     if n_filled > 0:
         random_fill = np.random.choice(bg_values, size=n_filled, replace=True)
-        result[bg_mask] = random_fill.astype(volume.dtype)
-    return result, bg_max, thresh, n_filled
+        result[outside] = random_fill.astype(volume.dtype)
+    return result, n_filled

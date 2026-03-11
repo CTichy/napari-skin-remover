@@ -20,7 +20,7 @@ from qtpy.QtCore import Qt, QTimer
 
 from ._io import load_file
 from ._inference import DEFAULT_MODEL, _SKIN_SEG_DIR, run_inference
-from ._background import remove_outside_brain, remove_global, fill_random_background
+from ._background import remove_outside_brain, remove_global, fill_outside_brain_random
 
 _CONFIG_PATH = Path.home() / ".config" / "napari-skin-remover" / "config.json"
 
@@ -273,7 +273,7 @@ class SkinRemoverWidget(QWidget):
     def _on_bg_mode_changed(self, btn):
         """Enable/disable tolerance slider depending on mode."""
         mode = self._bg_group.checkedId()
-        has_tol = mode in (1, 2, 3)
+        has_tol = mode in (1, 2)
         self._tol_slider.setEnabled(has_tol)
         self._tol_val.setEnabled(has_tol)
         self._tol_lbl.setEnabled(has_tol)
@@ -478,11 +478,11 @@ class SkinRemoverWidget(QWidget):
                     )
                     brain_only = (vol_proc * brain_mask).astype(volume.dtype)
                 elif bg_mode == 3:
-                    # Fill background-range pixels with random noise from corners
-                    vol_proc, *_ = fill_random_background(
-                        volume, tolerance_pct=bg_tolerance_pct
+                    # Fill outside-brain pixels (zeroed by skin removal) with
+                    # random corner samples — brain interior untouched
+                    brain_only, _ = fill_outside_brain_random(
+                        volume, brain_mask
                     )
-                    brain_only = (vol_proc * brain_mask).astype(volume.dtype)
 
                 result["brain_mask"] = brain_mask
                 result["brain_only"] = brain_only
