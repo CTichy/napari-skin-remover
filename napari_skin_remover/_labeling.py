@@ -14,7 +14,7 @@ Workflow:
 """
 
 import numpy as np
-from scipy.ndimage import gaussian_filter, label as nd_label
+from scipy.ndimage import gaussian_filter, label as nd_label, binary_fill_holes
 
 
 class _UnionFind:
@@ -65,7 +65,11 @@ def create_labels(
     blurred = gaussian_filter(binary, sigma=(sigma_z, sigma_xy, sigma_xy))
     smooth_mask = blurred > 0.5
 
-    print(f"   Smoothing: σ_xy={sigma_xy:.1f}  σ_z={sigma_z:.1f}")
+    # Fill holes per 2D slice — no pores inside contours
+    for z in range(smooth_mask.shape[0]):
+        smooth_mask[z] = binary_fill_holes(smooth_mask[z])
+
+    print(f"   Smoothing: σ_xy={sigma_xy:.1f}  σ_z={sigma_z:.1f}  (holes filled per slice)")
     print(f"   Signal voxels after smoothing: {smooth_mask.sum():,}")
 
     # ------------------------------------------------------------------ #

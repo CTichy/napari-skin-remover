@@ -309,6 +309,10 @@ class SkinRemoverWidget(QWidget):
 
         t2.addWidget(_sep())
 
+        self._save_labels_cb = QCheckBox("Save labels.tif")
+        self._save_labels_cb.setChecked(True)
+        t2.addWidget(self._save_labels_cb)
+
         self._labels_btn = QPushButton("Create Labels")
         self._labels_btn.setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }")
         t2.addWidget(self._labels_btn)
@@ -720,6 +724,14 @@ class SkinRemoverWidget(QWidget):
                 self._viewer.layers.remove(lname)
 
             self._viewer.add_labels(labels, name=lname, scale=scale)
+
+            if self._save_labels_cb.isChecked():
+                file_path = self._state.get("last_file_path")
+                out_dir   = file_path.parent if file_path else Path(".")
+                out       = out_dir / f"{stem}_labels.tif"
+                tifffile.imwrite(str(out), labels.astype(np.int32), compression="zlib")
+                print(f"Saved: {out}")
+
             self._labels_status_lbl.setText(f"Done — {n_labels} labels.")
             self._labels_btn.setEnabled(True)
 
