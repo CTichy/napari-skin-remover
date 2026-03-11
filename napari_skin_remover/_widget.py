@@ -296,13 +296,13 @@ class SkinRemoverWidget(QWidget):
         t2.addLayout(ovlp_row)
 
         area_row = QHBoxLayout()
-        area_row.addWidget(QLabel("Min blob area (px²):"))
+        area_row.addWidget(QLabel("Min volume (vox):"))
         self._area_slider = QSlider(Qt.Horizontal)
-        self._area_slider.setMinimum(1)
-        self._area_slider.setMaximum(500)
-        self._area_slider.setValue(50)
-        self._area_val = QLabel("50")
-        self._area_val.setFixedWidth(28)
+        self._area_slider.setMinimum(5000)
+        self._area_slider.setMaximum(10000)
+        self._area_slider.setValue(7500)
+        self._area_val = QLabel("7500")
+        self._area_val.setFixedWidth(40)
         area_row.addWidget(self._area_slider)
         area_row.addWidget(self._area_val)
         t2.addLayout(area_row)
@@ -359,7 +359,7 @@ class SkinRemoverWidget(QWidget):
             lambda v: self._ovlp_val.setText(str(v))
         )
         self._area_slider.valueChanged.connect(
-            lambda v: self._area_val.setText(str(v))
+            lambda v: self._area_val.setText(f"{v:,}")
         )
         self._labels_btn.clicked.connect(self._on_create_labels)
         self._viewer.layers.events.inserted.connect(self._refresh_layer_info)
@@ -673,7 +673,7 @@ class SkinRemoverWidget(QWidget):
         sigma_xy        = self._sxy_slider.value()  / 10.0
         sigma_z         = self._sz_slider.value()   / 10.0
         min_overlap_pct = float(self._ovlp_slider.value())
-        min_blob_area   = self._area_slider.value()
+        min_volume      = self._area_slider.value()
         stem            = target.name
         scale           = tuple(float(v) for v in target.scale) if len(target.scale) == 3 else (1., 1., 1.)
 
@@ -682,7 +682,7 @@ class SkinRemoverWidget(QWidget):
 
         print(f"\n{'='*70}")
         print(f"CREATE LABELS — {stem}  shape={volume.shape}")
-        print(f"σ_xy={sigma_xy}  σ_z={sigma_z}  min_overlap={min_overlap_pct}%  min_area={min_blob_area}px²")
+        print(f"σ_xy={sigma_xy}  σ_z={sigma_z}  min_overlap={min_overlap_pct}%  min_volume={min_volume} vox")
         print(f"{'='*70}")
 
         result = {}
@@ -694,7 +694,7 @@ class SkinRemoverWidget(QWidget):
                     sigma_xy=sigma_xy,
                     sigma_z=sigma_z,
                     min_overlap_pct=min_overlap_pct,
-                    min_blob_area=min_blob_area,
+                    min_volume=min_volume,
                 )
                 result["labels"] = labels
             except Exception as exc:

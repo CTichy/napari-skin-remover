@@ -39,7 +39,7 @@ def create_labels(
     sigma_xy: float = 1.0,
     sigma_z: float = 0.5,
     min_overlap_pct: float = 10.0,
-    min_blob_area: int = 50,
+    min_volume: int = 7500,
 ) -> np.ndarray:
     """
     Create 3D labels from brain_only volume using overlap-based slice linking.
@@ -50,7 +50,7 @@ def create_labels(
     sigma_xy        : Gaussian smoothing sigma in XY (voxels)
     sigma_z         : Gaussian smoothing sigma in Z (voxels)
     min_overlap_pct : minimum 2D overlap % to link blobs across slices
-    min_blob_area   : minimum blob area in pixels per slice (smaller blobs dropped)
+    min_volume      : minimum 3D blob size in voxels — smaller blobs removed after linking
 
     Returns
     -------
@@ -82,19 +82,13 @@ def create_labels(
         lbl, n = nd_label(smooth_mask[z])
         if n == 0:
             continue
-        # Remove blobs smaller than min_blob_area
-        for i in range(1, n + 1):
-            if (lbl == i).sum() < min_blob_area:
-                lbl[lbl == i] = 0
-        # Re-label after filtering and assign globally unique IDs
-        lbl_clean, n_clean = nd_label(lbl > 0)
-        if n_clean > 0:
-            lbl_clean[lbl_clean > 0] += offset
-            slice_labels[z] = lbl_clean
-            offset += n_clean
+        # Assign globally unique IDs (no per-slice area filter — 3D filter applied later)
+        lbl[lbl > 0] += offset
+        slice_labels[z] = lbl
+        offset += n
 
     total_blobs = offset
-    print(f"   2D blobs: {total_blobs}  (min_area={min_blob_area} px²)")
+    print(f"   2D blobs: {total_blobs}")
 
     if total_blobs == 0:
         print("   No blobs found — try lowering min blob area or smoothing sigma.")
@@ -143,8 +137,26 @@ def create_labels(
     for old_lbl in all_labels:
         lut[int(old_lbl)] = root_to_new[roots[int(old_lbl)]]
 
-    output   = lut[slice_labels]
-    n_final  = int(output.max())
+    output  = lut[slice_labels]
+
+    # 3D volume filter — remove blobs smaller than min_volume voxels
+    final_labels = np.unique(output[output > 0])
+    removed = 0
+    for lbl in final_labels:
+        vol = int((output == lbl).sum())
+        if vol < min_volume:
+            output[output == lbl] = 0
+            removed += 1
+
+    # Re-number sequentially after volume filtering
+    remaining = np.unique(output[output > 0])
+    lut2 = np.zeros(int(output.max()) + 1, dtype=np.int32)
+    for new_id, old_id in enumerate(remaining, start=1):
+        lut2[int(old_id)] = new_id
+    output = lut2[output]
+
+    n_final = int(output.max())
+    print(f"   3D blobs removed (< {min_volume} vox): {removed}")
     print(f"   Final 3D labels: {n_final}")
 
     return output
