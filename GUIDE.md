@@ -57,6 +57,10 @@ The AI model is a large file (~220 MB) that is **not included in the plugin**. Y
 **Download the model here:**
 👉 [best_model_fullstack.pth](https://cloud.technikum-wien.at/s/kYQ4qq3Jsn4xEyY)
 
+```
+https://cloud.technikum-wien.at/s/kYQ4qq3Jsn4xEyY
+```
+
 **Where to save it:**
 
 Create a folder called `models` anywhere on your computer that is easy to find. For example:
@@ -103,7 +107,7 @@ The plugin shows the path to the AI model. If it says "— no model selected —
 
 1. Click the `[...]` button
 2. Navigate to where you saved the model file
-3. Select `best_model_fullstack_v1_epoch460_dice9573.pth`
+3. Select `best_model_fullstack.pth`
 4. Click Open
 
 The path is saved automatically. Next time you open the plugin, it will already be there.
