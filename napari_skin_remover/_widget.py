@@ -354,6 +354,17 @@ class SkinRemoverWidget(QWidget):
         split_lbl_row.addWidget(self._split_use_sel_btn)
         t2.addLayout(split_lbl_row)
 
+        split_n_row = QHBoxLayout()
+        split_n_row.addWidget(QLabel("Split into:"))
+        self._split_n_spin = QSpinBox()
+        self._split_n_spin.setMinimum(2)
+        self._split_n_spin.setMaximum(10)
+        self._split_n_spin.setValue(2)
+        split_n_row.addWidget(self._split_n_spin)
+        split_n_row.addWidget(QLabel("parts"))
+        split_n_row.addStretch()
+        t2.addLayout(split_n_row)
+
         split_sigma_row = QHBoxLayout()
         split_sigma_row.addWidget(QLabel("Smooth σ:"))
         self._split_sigma_slider = QSlider(Qt.Horizontal)
@@ -820,6 +831,7 @@ class SkinRemoverWidget(QWidget):
             return
 
         target_label = self._split_label_spin.value()
+        n_splits     = self._split_n_spin.value()
         sigma        = self._split_sigma_slider.value() / 10.0
         min_dist     = self._split_dist_slider.value()
 
@@ -831,9 +843,10 @@ class SkinRemoverWidget(QWidget):
 
         def _worker():
             try:
-                result["labels"], result["new_id"] = split_label(
+                result["labels"], result["new_ids"] = split_label(
                     labels,
                     target_label=target_label,
+                    n_splits=n_splits,
                     sigma=sigma,
                     min_distance=min_dist,
                 )
@@ -854,12 +867,12 @@ class SkinRemoverWidget(QWidget):
                 self._split_status_lbl.setText(f"ERROR: {result['error']}")
                 self._split_btn.setEnabled(True)
                 return
-            lyr.data = result["labels"]
-            new_id   = result["new_id"]
-            n_total  = int(result["labels"].max())
+            lyr.data  = result["labels"]
+            new_ids   = result["new_ids"]
+            n_total   = int(result["labels"].max())
+            all_ids   = [target_label] + new_ids
             self._split_status_lbl.setText(
-                f"Done — label {target_label} split into {target_label} & {new_id}. "
-                f"Total labels: {n_total}."
+                f"Done — {n_splits} parts: {all_ids}. Total labels: {n_total}."
             )
             self._split_btn.setEnabled(True)
 

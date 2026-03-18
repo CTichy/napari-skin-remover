@@ -417,89 +417,155 @@ def resort_labels(
 def split_label(
     labels: np.ndarray,
     target_label: int,
+    n_splits: int = 2,
     sigma: float = 1.0,
     min_distance: int = 5,
-) -> "tuple[np.ndarray, int]":
+) -> "tuple[np.ndarray, list[int]]":
     """
-    Split one label into two using watershed on the distance transform.
+    Split one label into n_splits parts using watershed on the distance transform.
 
     The boundary is placed where the object is narrowest — the saddle point
-    of the distance map between the two local maxima.
+    of the distance map between the local maxima.
+
+    Speed notes
+    -----------
+    - All operations run on the bounding box of the target label, not the
+      full volume — critical for large stacks.
+    - Gaussian smoothing runs on GPU (CuPy) when available.
+    - Seed assignment runs on GPU via Euclidean nearest-seed (CuPy); falls
+      back to CPU watershed if GPU is unavailable or runs out of memory.
 
     Parameters
     ----------
     labels       : (Z, Y, X) int32 ndarray
     target_label : label value to split
+    n_splits     : number of parts to produce (≥ 2)
     sigma        : Gaussian smoothing of distance map (higher = broader peaks)
-    min_distance : minimum voxel distance between the two seed peaks
+    min_distance : minimum voxel distance between seed peaks
 
     Returns
     -------
-    (new_labels, new_id)
-        new_labels — same shape as labels with the blob split into two parts
-        new_id     — label value assigned to the second part
-                     (target_label is kept for the first part)
+    (new_labels, new_ids)
+        new_labels — same shape as labels, blob split into n_splits parts
+        new_ids    — list of n_splits-1 new label IDs created
+                     (target_label is kept for part 1)
 
     Raises
     ------
-    ValueError  if the label is not found, or if only one peak is detected
-                (object is too round / not two-lobed after smoothing)
+    ValueError  if the label is not found, or fewer peaks than n_splits found
     """
-    from scipy.ndimage import distance_transform_edt, gaussian_filter
+    from scipy.ndimage import distance_transform_edt
     from skimage.feature import peak_local_max
-    from skimage.segmentation import watershed
 
     mask = labels == target_label
     if not np.any(mask):
         raise ValueError(f"Label {target_label} not found")
 
-    # 1. Distance transform
-    dist = distance_transform_edt(mask).astype(np.float32)
+    # ── 1. Crop to bounding box (avoids running EDT on full volume) ────────
+    nz  = np.argwhere(mask)
+    lo  = nz.min(axis=0)
+    hi  = nz.max(axis=0)
+    pad = max(int(min_distance), int(sigma) + 2, 2)
+    lo_p = np.maximum(lo - pad, 0)
+    hi_p = np.minimum(hi + pad, np.array(mask.shape) - 1)
+    sl   = tuple(slice(int(a), int(b) + 1) for a, b in zip(lo_p, hi_p))
 
-    # 2. Smooth (critical in 3D to suppress local noise peaks)
-    if sigma > 0:
-        dist = gaussian_filter(dist, sigma=float(sigma))
+    mask_crop = mask[sl]
 
-    # 3. Find peaks — restricted to the mask
+    # ── 2. Distance transform (CPU — not in cupyx) ─────────────────────────
+    dist = distance_transform_edt(mask_crop).astype(np.float32)
+
+    # ── 3. Gaussian smoothing — GPU if available, CPU fallback ─────────────
+    if _BACKEND == "cuda" and _CP is not None:
+        try:
+            dist_gpu  = _CP.asarray(dist)
+            dist_gpu  = _CPND.gaussian_filter(dist_gpu, sigma=float(sigma))
+            dist_smooth = dist_gpu.get()
+            del dist_gpu
+            print(f"   Split: Gaussian smooth on GPU")
+        except Exception as exc:
+            print(f"   Split: GPU smooth failed ({exc}), using CPU")
+            dist_smooth = cpu_gaussian(dist, sigma=float(sigma)) if sigma > 0 else dist
+    else:
+        dist_smooth = cpu_gaussian(dist, sigma=float(sigma)) if sigma > 0 else dist
+
+    # ── 4. Peak detection (CPU, small data after crop) ─────────────────────
     coords = peak_local_max(
-        dist,
-        labels=mask,
+        dist_smooth,
+        labels=mask_crop,
         min_distance=int(min_distance),
         exclude_border=False,
     )
 
-    if len(coords) < 2:
+    if len(coords) < n_splits:
         raise ValueError(
-            f"Only {len(coords)} peak found — try reducing Min distance "
-            f"or reducing Smooth σ to reveal more structure"
+            f"Only {len(coords)} peak(s) found, need {n_splits} — "
+            f"try reducing Min distance or Smooth σ"
         )
 
-    # 4. Take the 2 strongest peaks
-    values  = dist[tuple(coords.T)]
-    top2    = np.argsort(values)[-2:]
-    coords2 = coords[top2]
+    # Top n_splits peaks by distance value (strongest = most central)
+    values   = dist_smooth[tuple(coords.T)]
+    top_n    = np.argsort(values)[-n_splits:]
+    seeds    = coords[top_n]   # shape (n_splits, 3) in cropped coords
 
-    # 5. Seed markers
-    markers = np.zeros_like(labels, dtype=np.int32)
-    for i, c in enumerate(coords2, start=1):
-        markers[tuple(c)] = i
+    # ── 5. Seed assignment — GPU nearest-seed, CPU watershed fallback ──────
+    split_crop = None
 
-    # 6. Watershed on negative distance (grows from each peak outward)
-    split = watershed(-dist, markers, mask=mask)
+    if _BACKEND == "cuda" and _CP is not None:
+        try:
+            mask_crop_gpu   = _CP.asarray(mask_crop)
+            mask_coords_gpu = _CP.argwhere(mask_crop_gpu)          # (M, 3) int64
+            mc_f            = mask_coords_gpu.astype(_CP.float32)  # (M, 3) float32
 
-    # 7. Write result back — part 1 keeps target_label, part 2 gets a new id
-    new_id = int(labels.max()) + 1
+            min_dists   = _CP.full(mc_f.shape[0], _CP.inf, dtype=_CP.float32)
+            assignments = _CP.ones(mc_f.shape[0], dtype=_CP.int32)
+
+            for i, seed in enumerate(seeds, start=1):
+                seed_gpu = _CP.asarray(seed, dtype=_CP.float32)
+                diff     = mc_f - seed_gpu[None, :]          # (M, 3)
+                sq_d     = (diff ** 2).sum(axis=1)           # (M,)
+                better   = sq_d < min_dists
+                min_dists   = _CP.where(better, sq_d, min_dists)
+                assignments = _CP.where(better, _CP.int32(i), assignments)
+
+            split_gpu = _CP.zeros(mask_crop.shape, dtype=_CP.int32)
+            split_gpu[
+                mask_coords_gpu[:, 0],
+                mask_coords_gpu[:, 1],
+                mask_coords_gpu[:, 2],
+            ] = assignments
+            split_crop = split_gpu.get()
+            print(f"   Split: seed assignment on GPU")
+        except Exception as exc:
+            print(f"   Split: GPU assignment failed ({exc}), using CPU watershed")
+            split_crop = None
+
+    if split_crop is None:
+        from skimage.segmentation import watershed
+        markers = np.zeros(mask_crop.shape, dtype=np.int32)
+        for i, c in enumerate(seeds, start=1):
+            markers[tuple(c)] = i
+        split_crop = watershed(-dist_smooth, markers, mask=mask_crop)
+
+    # ── 6. Write result back into full-volume label array ─────────────────
+    split_full = np.zeros(mask.shape, dtype=np.int32)
+    split_full[sl] = split_crop
+
     out    = labels.copy()
-    out[split == 1] = target_label
-    out[split == 2] = new_id
+    new_ids = []
+    max_lbl = int(labels.max())
 
-    n1 = int((split == 1).sum())
-    n2 = int((split == 2).sum())
-    print(f"   Split label {target_label}: "
-          f"part A = {n1:,} vox (id {target_label})  "
-          f"part B = {n2:,} vox (id {new_id})")
+    out[split_full == 1] = target_label
+    for i in range(2, n_splits + 1):
+        new_id = max_lbl + (i - 1)
+        out[split_full == i] = new_id
+        new_ids.append(new_id)
 
-    return out.astype(np.int32), new_id
+    for i, nid in enumerate([target_label] + new_ids, start=1):
+        n_vox = int((split_full == i).sum())
+        print(f"   Part {i}: {n_vox:,} vox  (id {nid})")
+
+    return out.astype(np.int32), new_ids
 
 
 def create_labels(
