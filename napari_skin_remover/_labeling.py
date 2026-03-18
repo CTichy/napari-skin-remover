@@ -362,6 +362,58 @@ def _create_labels_threaded(
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def resort_labels(
+    labels: np.ndarray,
+    sort_by: str = "size",
+    reverse: bool = False,
+) -> np.ndarray:
+    """
+    Renumber labels 1…N by the chosen criterion.
+
+    Parameters
+    ----------
+    labels   : (Z, Y, X) int32 ndarray — existing label volume (0 = background)
+    sort_by  : "size" | "centroid_z" | "centroid_y" | "centroid_x"
+    reverse  : reverse the natural sort order
+                 size      — natural = descending (largest = label 1)
+                 centroid  — natural = ascending  (smallest coord = label 1)
+
+    Returns
+    -------
+    (Z, Y, X) int32 ndarray — same objects, renumbered 1…N
+    """
+    from scipy.ndimage import center_of_mass as _com
+
+    unique = np.unique(labels)
+    unique = unique[unique > 0]
+    if unique.size == 0:
+        return labels.copy()
+
+    label_list = unique.tolist()
+    max_lbl    = int(unique.max())
+
+    if sort_by == "size":
+        counts = np.bincount(labels.ravel().astype(np.int64), minlength=max_lbl + 1)
+        keyed  = [(int(counts[lbl]), int(lbl)) for lbl in label_list]
+        # natural: descending (largest first → label 1)
+        keyed.sort(key=lambda t: t[0], reverse=not reverse)
+    else:
+        axis_map = {"centroid_z": 0, "centroid_y": 1, "centroid_x": 2}
+        axis     = axis_map[sort_by]
+        raw      = _com(labels > 0, labels, label_list)
+        if unique.size == 1:
+            raw = [raw]   # scipy returns a single tuple when only one label
+        keyed = [(float(c[axis]), int(lbl)) for lbl, c in zip(label_list, raw)]
+        # natural: ascending (smallest coordinate first → label 1)
+        keyed.sort(key=lambda t: t[0], reverse=reverse)
+
+    lut = np.zeros(max_lbl + 1, dtype=np.int32)
+    for new_id, (_key, old_id) in enumerate(keyed, start=1):
+        lut[old_id] = new_id
+
+    return lut[labels].astype(np.int32)
+
+
 def create_labels(
     volume: np.ndarray,
     sigma_xy: float = 1.0,

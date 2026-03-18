@@ -15,14 +15,14 @@ import napari
 from qtpy.QtWidgets import (
     QPushButton, QLabel, QWidget, QVBoxLayout, QHBoxLayout,
     QSlider, QCheckBox, QFileDialog, QSizePolicy, QButtonGroup, QRadioButton,
-    QTabWidget,
+    QTabWidget, QComboBox,
 )
 from qtpy.QtCore import Qt, QTimer
 
 from ._io import load_file
 from ._inference import DEFAULT_MODEL, _SKIN_SEG_DIR, run_inference
 from ._background import remove_outside_brain, remove_global, fill_outside_brain_random
-from ._labeling import create_labels
+from ._labeling import create_labels, resort_labels
 
 _CONFIG_PATH = Path.home() / ".config" / "napari-skin-remover" / "config.json"
 
@@ -321,6 +321,29 @@ class SkinRemoverWidget(QWidget):
         self._labels_status_lbl.setWordWrap(True)
         t2.addWidget(self._labels_status_lbl)
 
+        t2.addWidget(_sep())
+
+        sort_row = QHBoxLayout()
+        sort_row.addWidget(QLabel("Sort by:"))
+        self._sort_combo = QComboBox()
+        self._sort_combo.addItem("Size",       "size")
+        self._sort_combo.addItem("Centroid Z", "centroid_z")
+        self._sort_combo.addItem("Centroid Y", "centroid_y")
+        self._sort_combo.addItem("Centroid X", "centroid_x")
+        sort_row.addWidget(self._sort_combo)
+        t2.addLayout(sort_row)
+
+        self._sort_reverse_cb = QCheckBox("Reverse order")
+        t2.addWidget(self._sort_reverse_cb)
+
+        self._resort_btn = QPushButton("Resort Labels")
+        self._resort_btn.setStyleSheet("QPushButton { padding: 5px; }")
+        t2.addWidget(self._resort_btn)
+
+        self._resort_status_lbl = QLabel("")
+        self._resort_status_lbl.setWordWrap(True)
+        t2.addWidget(self._resort_status_lbl)
+
         t2.addStretch()
         tab2.setLayout(t2)
         tabs.addTab(tab2, "Create Labels")
@@ -362,6 +385,7 @@ class SkinRemoverWidget(QWidget):
             lambda v: self._area_val.setText(f"{v:,}")
         )
         self._labels_btn.clicked.connect(self._on_create_labels)
+        self._resort_btn.clicked.connect(self._on_resort_labels)
         self._viewer.layers.events.inserted.connect(self._refresh_layer_info)
         self._viewer.layers.events.removed.connect(self._refresh_layer_info)
         self._viewer.layers.selection.events.changed.connect(self._refresh_layer_info)
@@ -656,6 +680,64 @@ class SkinRemoverWidget(QWidget):
 
         timer.timeout.connect(_poll)
         timer.start(500)
+
+    def _active_labels_layer(self):
+        """Return the active Labels layer, or the topmost one, or None."""
+        active = self._viewer.layers.selection.active
+        if active is not None and isinstance(active, napari.layers.Labels):
+            return active
+        for lyr in reversed(self._viewer.layers):
+            if isinstance(lyr, napari.layers.Labels):
+                return lyr
+        return None
+
+    def _on_resort_labels(self):
+        lyr = self._active_labels_layer()
+        if lyr is None:
+            self._resort_status_lbl.setText("No Labels layer selected.")
+            return
+
+        sort_by = self._sort_combo.currentData()
+        reverse = self._sort_reverse_cb.isChecked()
+
+        self._resort_btn.setEnabled(False)
+        self._resort_status_lbl.setText("Resorting...")
+
+        import numpy as np
+        labels = np.asarray(lyr.data)
+        result = {}
+
+        def _worker():
+            try:
+                result["labels"] = resort_labels(labels, sort_by=sort_by, reverse=reverse)
+            except Exception as exc:
+                traceback.print_exc()
+                result["error"] = str(exc)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        timer = QTimer(self)
+
+        def _poll():
+            if thread.is_alive():
+                return
+            timer.stop()
+            if "error" in result:
+                self._resort_status_lbl.setText(f"ERROR: {result['error']}")
+                self._resort_btn.setEnabled(True)
+                return
+            lyr.data = result["labels"]
+            n = int(result["labels"].max())
+            sort_label = self._sort_combo.currentText()
+            rev_str    = " (reversed)" if reverse else ""
+            self._resort_status_lbl.setText(
+                f"Done — {n} labels, sorted by {sort_label}{rev_str}."
+            )
+            self._resort_btn.setEnabled(True)
+
+        timer.timeout.connect(_poll)
+        timer.start(200)
 
     def _on_create_labels(self):
         # Read active layer
