@@ -516,14 +516,25 @@ def split_label(
         markers[tuple(c)] = i
     split_crop = watershed(-dist_smooth, markers, mask=mask_crop)
 
-    # ── 6. Write result back into full-volume label array ─────────────────
-    split_full = np.zeros(mask.shape, dtype=np.int32)
-    split_full[sl] = split_crop
+    # ── 6. Erode each part by 1 voxel → 1-voxel gap on every boundary ────
+    #    This guarantees the parts never touch and each wall has empty space.
+    from scipy.ndimage import binary_erosion
+    eroded_crop = np.zeros(mask_crop.shape, dtype=np.int32)
+    for i in range(1, n_splits + 1):
+        part    = split_crop == i
+        eroded  = binary_erosion(part, iterations=1)
+        eroded_crop[eroded] = i
 
-    out    = labels.copy()
+    # ── 7. Write result back into full-volume label array ─────────────────
+    split_full = np.zeros(mask.shape, dtype=np.int32)
+    split_full[sl] = eroded_crop
+
+    out     = labels.copy()
     new_ids = []
     max_lbl = int(labels.max())
 
+    # Zero out the original blob first (gap voxels become background)
+    out[mask] = 0
     out[split_full == 1] = target_label
     for i in range(2, n_splits + 1):
         new_id = max_lbl + (i - 1)
