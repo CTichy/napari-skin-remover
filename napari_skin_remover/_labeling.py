@@ -41,6 +41,8 @@ def _detect_backend() -> tuple[str, object, object]:
     """Return (backend_name, cupy_module, cupyx_ndimage_module)."""
 
     # ── CUDA via CuPy ──────────────────────────────────────────────────────
+    import io, sys
+    _saved, sys.stdout = sys.stdout, io.StringIO()
     try:
         import cupy as cp
         import cupyx.scipy.ndimage as cpnd
@@ -50,6 +52,8 @@ def _detect_backend() -> tuple[str, object, object]:
         return "cuda", cp, cpnd
     except Exception:
         pass
+    finally:
+        sys.stdout = _saved
 
     # ── Apple Silicon MPS ──────────────────────────────────────────────────
     try:

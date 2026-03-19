@@ -76,6 +76,10 @@ _N_THREADS = max(1, (os.cpu_count() or 4) // 2)
 
 def _detect_stats_backend():
     """Return (cupy, cucim_measure) or (None, None)."""
+    import io, sys
+    # cupy / cucim print a spurious cuVS/pylibraft warning to stdout on import;
+    # suppress it — it doesn't affect regionprops functionality.
+    _saved, sys.stdout = sys.stdout, io.StringIO()
     try:
         import cupy as cp
         import cucim.skimage.measure as cucim_measure
@@ -86,6 +90,8 @@ def _detect_stats_backend():
         return cp, cucim_measure
     except Exception:
         return None, None
+    finally:
+        sys.stdout = _saved
 
 
 _CP_STATS, _CUCIM = _detect_stats_backend()
