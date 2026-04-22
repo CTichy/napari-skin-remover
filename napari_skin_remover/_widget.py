@@ -1324,6 +1324,24 @@ class SkinRemoverWidget(QWidget):
             else:
                 region_lines = None  # layer had no line shapes
 
+        # Validate: warn if a column is checked but its required input is missing
+        warnings = []
+        region_cols = {"brain_region", "region_boundary_dist_um"}
+        intensity_cols = {"mean_intensity", "integrated_intensity", "intensity_cv"}
+        checked = {k for k, cb in self._col_checkboxes.items() if cb.isChecked()}
+        if checked & region_cols and region_lines is None:
+            warnings.append(
+                "brain_region / region_boundary_dist_um checked but no Shapes layer "
+                "with line/path shapes is selected — those columns will be skipped."
+            )
+        if checked & intensity_cols and image is None:
+            warnings.append(
+                "Intensity columns checked but no Image layer is selected — "
+                "those columns will be skipped."
+            )
+        if warnings:
+            self._stats_status_lbl.setText("Warning: " + "  |  ".join(warnings))
+
         labels    = np.asarray(lyr.data)
         out_dir   = self._output_dir()
         stem      = self._state["last_file_path"].stem if self._state.get("last_file_path") else lyr.name
