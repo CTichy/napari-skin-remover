@@ -8,6 +8,8 @@ Statistics computed per label (45 columns max)
   volume_um3              : physical volume (µm³)
   centroid_z/y/x_vox      : centroid in voxels
   centroid_z/y/x_um       : centroid in µm
+  bbox_z0/y0/x0_vox       : bounding box start corner (voxels, inclusive)
+  bbox_z1/y1/x1_vox       : bounding box end corner (voxels, exclusive)
   bbox_dz/dy/dx_um        : bounding box size (µm)
   eq_diam_um              : equivalent sphere diameter (µm)
   axis1/2/3_um            : principal axis lengths (µm), axis1 = longest
@@ -674,6 +676,12 @@ def compute_stats(
             "centroid_z_um":        round(float(table["centroid-0"][i]) * sz, 2),
             "centroid_y_um":        round(float(table["centroid-1"][i]) * sy, 2),
             "centroid_x_um":        round(float(table["centroid-2"][i]) * sx, 2),
+            "bbox_z0_vox":          int(table["bbox-0"][i]),
+            "bbox_y0_vox":          int(table["bbox-1"][i]),
+            "bbox_x0_vox":          int(table["bbox-2"][i]),
+            "bbox_z1_vox":          int(table["bbox-3"][i]),
+            "bbox_y1_vox":          int(table["bbox-4"][i]),
+            "bbox_x1_vox":          int(table["bbox-5"][i]),
             "bbox_dz_um":           round(float(dz_um[i]), 2),
             "bbox_dy_um":           round(float(dy_um[i]), 2),
             "bbox_dx_um":           round(float(dx_um[i]), 2),

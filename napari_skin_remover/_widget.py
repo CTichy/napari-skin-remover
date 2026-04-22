@@ -65,9 +65,8 @@ _STATS_COLUMNS = [
     ("eq_diam_um",              "eq_diam_um  (equiv. sphere diam.)",             False),
     ("axis2_um",                "axis2_um  (middle axis, derived)",              False),
     ("principal_axis_dir",      "principal_axis_dir  (Z/Y/X orientation)",       False),
-    ("bbox_dz_um",              "bbox_dz_um  (bounding box depth, µm)",          False),
-    ("bbox_dy_um",              "bbox_dy_um  (bounding box height, µm)",         False),
-    ("bbox_dx_um",              "bbox_dx_um  (bounding box width, µm)",          False),
+    ("bbox_vox",                "bbox_vox  (z0/y0/x0/z1/y1/x1, voxels)",        True),
+    ("bbox_um",                 "bbox_um  (dz/dy/dx, µm)",                       False),
     ("extent",                  "extent  (bbox fill fraction 0–1)",              False),
     ("nearest_neighbor_ratio",  "nearest_neighbor_ratio  (Clark-Evans 3D)",      False),
     ("depth_normalized",        "depth_normalized  (Z position 0–1)",            False),
@@ -85,6 +84,13 @@ _STATS_COLUMNS = [
     ("region_boundary_dist_um", "region_boundary_dist_um  [region opt.]",        True),
     ("description",             "description  [AI backend]",                     False),
 ]
+
+# Group keys that expand to multiple DataFrame columns when selected
+_COL_GROUPS = {
+    "bbox_vox": ["bbox_z0_vox", "bbox_y0_vox", "bbox_x0_vox",
+                 "bbox_z1_vox", "bbox_y1_vox", "bbox_x1_vox"],
+    "bbox_um":  ["bbox_dz_um", "bbox_dy_um", "bbox_dx_um"],
+}
 
 
 def _load_config() -> dict:
@@ -1380,10 +1386,12 @@ class SkinRemoverWidget(QWidget):
                 self._stats_btn.setEnabled(True)
                 return
             df = result["df"]
-            # Filter to selected columns; label is always kept
-            selected = {"label"} | {
-                k for k, cb in self._col_checkboxes.items() if cb.isChecked()
-            }
+            # Filter to selected columns; label is always kept.
+            # Group keys (bbox_vox, bbox_um) expand to their constituent columns.
+            selected = {"label"}
+            for k, cb in self._col_checkboxes.items():
+                if cb.isChecked():
+                    selected.update(_COL_GROUPS.get(k, [k]))
             df = df[[c for c in df.columns if c in selected]]
             df.to_csv(str(out_csv), index=False)
             self._stats_status_lbl.setText(
