@@ -647,7 +647,6 @@ class SkinRemoverWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFixedHeight(155)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         col_inner = QWidget()
         col_vbox  = QVBoxLayout()
         col_vbox.setSpacing(1)
