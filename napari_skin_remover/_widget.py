@@ -15,7 +15,7 @@ import napari
 from qtpy.QtWidgets import (
     QPushButton, QLabel, QWidget, QVBoxLayout, QHBoxLayout,
     QSlider, QCheckBox, QFileDialog, QSizePolicy, QButtonGroup, QRadioButton,
-    QTabWidget, QComboBox, QSpinBox, QLineEdit,
+    QTabWidget, QComboBox, QSpinBox, QLineEdit, QScrollArea, QGroupBox,
 )
 from qtpy.QtCore import Qt, QTimer
 
@@ -34,6 +34,57 @@ _BG_SUFFIX = {
     2: "_NoBG",     # No Background (global removal)
     3: "_RndFill",  # Random Fill (background replaced with noise)
 }
+
+# (column_key, display_label, default_on)
+# label is always included and its checkbox is disabled.
+# Optional columns (intensity / brain region / description) are shown but only
+# appear in the DataFrame when the respective inputs are provided.
+_STATS_COLUMNS = [
+    ("label",                   "label  (identifier)",                           True),
+    ("volume_vox",              "volume_vox  (voxels)",                          True),
+    ("volume_um3",              "volume_um3  (µm³)",                             True),
+    ("centroid_z_vox",          "centroid_z_vox",                                True),
+    ("centroid_y_vox",          "centroid_y_vox",                                True),
+    ("centroid_x_vox",          "centroid_x_vox",                                True),
+    ("centroid_z_um",           "centroid_z_um  (µm)",                           True),
+    ("centroid_y_um",           "centroid_y_um  (µm)",                           True),
+    ("centroid_x_um",           "centroid_x_um  (µm)",                           True),
+    ("sphericity",              "sphericity",                                     True),
+    ("solidity",                "solidity",                                       True),
+    ("elongation",              "elongation",                                     True),
+    ("axis1_um",                "axis1_um  (longest axis, µm)",                  True),
+    ("axis3_um",                "axis3_um  (shortest axis, µm)",                 True),
+    ("surface_area_um2",        "surface_area_um2  (µm²)",                       True),
+    ("surface_to_volume_ratio", "surface_to_volume_ratio",                       True),
+    ("n_branches",              "n_branches",                                    True),
+    ("n_endpoints",             "n_endpoints",                                   True),
+    ("mean_branch_len_um",      "mean_branch_len_um  (µm)",                      True),
+    ("nearest_neighbor_dist_um","nearest_neighbor_dist_um  (µm)",                True),
+    ("local_density_100um",     "local_density_100um",                           True),
+    # ── default OFF ──────────────────────────────────────────────────────────
+    ("eq_diam_um",              "eq_diam_um  (equiv. sphere diam.)",             False),
+    ("axis2_um",                "axis2_um  (middle axis, derived)",              False),
+    ("principal_axis_dir",      "principal_axis_dir  (Z/Y/X orientation)",       False),
+    ("bbox_dz_um",              "bbox_dz_um  (bounding box depth, µm)",          False),
+    ("bbox_dy_um",              "bbox_dy_um  (bounding box height, µm)",         False),
+    ("bbox_dx_um",              "bbox_dx_um  (bounding box width, µm)",          False),
+    ("extent",                  "extent  (bbox fill fraction 0–1)",              False),
+    ("nearest_neighbor_ratio",  "nearest_neighbor_ratio  (Clark-Evans 3D)",      False),
+    ("depth_normalized",        "depth_normalized  (Z position 0–1)",            False),
+    ("max_branch_len_um",       "max_branch_len_um  (µm)",                       False),
+    ("branch_tortuosity",       "branch_tortuosity",                             False),
+    ("branch_density",          "branch_density  (per 10⁶ µm³)",                False),
+    ("endpoint_density",        "endpoint_density  (per 10⁶ µm³)",              False),
+    ("process_complexity",      "process_complexity  (custom composite)",        False),
+    ("morphotype",              "morphotype  (unvalidated rule-based)",          False),
+    # ── optional: only present when respective inputs are provided ────────────
+    ("mean_intensity",          "mean_intensity  [intensity opt.]",              True),
+    ("integrated_intensity",    "integrated_intensity  [intensity opt.]",        True),
+    ("intensity_cv",            "intensity_cv  [intensity opt.]",                False),
+    ("brain_region",            "brain_region  [region opt.]",                   True),
+    ("region_boundary_dist_um", "region_boundary_dist_um  [region opt.]",        True),
+    ("description",             "description  [AI backend]",                     False),
+]
 
 
 def _load_config() -> dict:
@@ -571,6 +622,54 @@ class SkinRemoverWidget(QWidget):
         regions_note.setStyleSheet("color: #aaa; font-size: 10px;")
         regions_note.setWordWrap(True)
         t3.addWidget(regions_note)
+
+        t3.addWidget(_sep())
+
+        # ── Output column selector ────────────────────────────────────────── #
+        col_hdr = QHBoxLayout()
+        col_hdr.addWidget(QLabel("Output columns:"))
+        _col_all_btn   = QPushButton("All")
+        _col_all_btn.setFixedWidth(36)
+        _col_reset_btn = QPushButton("Reset")
+        _col_reset_btn.setFixedWidth(44)
+        col_hdr.addWidget(_col_all_btn)
+        col_hdr.addWidget(_col_reset_btn)
+        col_hdr.addStretch()
+        t3.addLayout(col_hdr)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(155)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        col_inner = QWidget()
+        col_vbox  = QVBoxLayout()
+        col_vbox.setSpacing(1)
+        col_vbox.setContentsMargins(4, 2, 4, 2)
+        self._col_checkboxes = {}
+        for _key, _lbl, _on in _STATS_COLUMNS:
+            cb = QCheckBox(_lbl)
+            cb.setChecked(_on)
+            if _key == "label":
+                cb.setEnabled(False)
+            col_vbox.addWidget(cb)
+            self._col_checkboxes[_key] = cb
+        col_inner.setLayout(col_vbox)
+        scroll.setWidget(col_inner)
+        t3.addWidget(scroll)
+
+        def _select_all_cols():
+            for cb in self._col_checkboxes.values():
+                if cb.isEnabled():
+                    cb.setChecked(True)
+
+        def _reset_cols():
+            for (_key, _lbl, _on) in _STATS_COLUMNS:
+                cb = self._col_checkboxes[_key]
+                if cb.isEnabled():
+                    cb.setChecked(_on)
+
+        _col_all_btn.clicked.connect(_select_all_cols)
+        _col_reset_btn.clicked.connect(_reset_cols)
 
         t3.addWidget(_sep())
 
@@ -1169,13 +1268,21 @@ class SkinRemoverWidget(QWidget):
             self._stats_status_lbl.setText("No Labels layer selected.")
             return
 
-        # Scale from layer — never hardcoded
-        sc = lyr.scale
-        if len(sc) != 3 or all(v == 1.0 for v in sc):
-            # Try active image layer scale as fallback
-            img = self._active_layer()
-            sc = img.scale if img is not None and len(img.scale) == 3 else sc
-        scale_zyx = tuple(float(v) for v in sc)
+        # Scale priority: 1) file metadata (most reliable, set by Open button),
+        # 2) Labels layer scale, 3) active image layer scale, 4) default (1,1,1).
+        # Using metadata avoids the case where a Labels layer loaded from a TIF
+        # has the napari default scale (1,1,1), which makes centroid_um == centroid_vox
+        # and volume_um3 == volume_vox (wrong — Z=1.0 µm, Y=X=0.174 µm per voxel).
+        meta = self._state.get("metadata")
+        if meta and "scale" in meta:
+            scale_zyx = tuple(float(v) for v in meta["scale"])
+        else:
+            sc = lyr.scale
+            if len(sc) != 3 or all(v == 1.0 for v in sc):
+                img = self._active_layer()
+                sc = img.scale if img is not None and len(img.scale) == 3 else sc
+            scale_zyx = tuple(float(v) for v in sc)
+        print(f"Statistics scale: Z={scale_zyx[0]:.4f}  Y={scale_zyx[1]:.4f}  X={scale_zyx[2]:.4f} µm/vox")
 
         backend = self._stats_backend_combo.currentData()
 
@@ -1255,6 +1362,11 @@ class SkinRemoverWidget(QWidget):
                 self._stats_btn.setEnabled(True)
                 return
             df = result["df"]
+            # Filter to selected columns; label is always kept
+            selected = {"label"} | {
+                k for k, cb in self._col_checkboxes.items() if cb.isChecked()
+            }
+            df = df[[c for c in df.columns if c in selected]]
             df.to_csv(str(out_csv), index=False)
             self._stats_status_lbl.setText(
                 f"Done — {len(df)} labels. Saved: {out_csv.name}"
