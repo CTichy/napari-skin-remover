@@ -8356,22 +8356,30 @@ class ZFMicrogliaAIWidget(QWidget):
         self._cp_run_btn.setEnabled(False)
         self._cp_relabel_btn.setEnabled(False)
         self._cp_status_lbl.setText(f"Re-running label {label_id} only (device={'cuda' if gpu else 'cpu'})...")
+        self._cp_log_view.clear()
 
         result = {}
+        log_lines = []
+        log_lock = threading.Lock()
+
+        def _push_log(line):
+            with log_lock:
+                log_lines.append(line)
 
         def _progress(msg):
             result["_progress"] = msg
 
         def _worker():
             try:
-                new_labels, info = _rerun_single_cell(
-                    volume, labels, label_id, model_path,
-                    cellprob=cellprob, flow=flow, anisotropy=anisotropy,
-                    max_gap=max_gap, min_contact=min_contact, large_contact=large_contact,
-                    gt_min=gt_min, gpu=gpu, min_hole_size=min_hole_size, min_size=min_size,
-                    final_min_fraction=final_min_fraction, niter=niter, scale_zyx=scale,
-                    progress_cb=_progress,
-                )
+                with capture_live_output(_push_log):
+                    new_labels, info = _rerun_single_cell(
+                        volume, labels, label_id, model_path,
+                        cellprob=cellprob, flow=flow, anisotropy=anisotropy,
+                        max_gap=max_gap, min_contact=min_contact, large_contact=large_contact,
+                        gt_min=gt_min, gpu=gpu, min_hole_size=min_hole_size, min_size=min_size,
+                        final_min_fraction=final_min_fraction, niter=niter, scale_zyx=scale,
+                        progress_cb=_progress,
+                    )
                 result["new_labels"] = new_labels
                 result["info"] = info
             except Exception as exc:
@@ -8384,6 +8392,14 @@ class ZFMicrogliaAIWidget(QWidget):
         timer3 = QTimer(self)
 
         def _poll3():
+            with log_lock:
+                new_lines = list(log_lines)
+                log_lines.clear()
+            if new_lines:
+                self._cp_log_view.append("\n".join(new_lines))
+                sb = self._cp_log_view.verticalScrollBar()
+                sb.setValue(sb.maximum())
+
             if thread.is_alive():
                 if "_progress" in result:
                     self._cp_status_lbl.setText(result["_progress"])
@@ -8414,6 +8430,12 @@ class ZFMicrogliaAIWidget(QWidget):
                 f"Done — label {label_id} replaced with {info['n_new']} new label(s): "
                 f"{new_ids_str}.{porous_note}"
             )
+            self._cp_log_view.append(
+                f"\nDone — label {label_id} replaced with {info['n_new']} new label(s): "
+                f"{new_ids_str}.{porous_note}"
+            )
+            sb = self._cp_log_view.verticalScrollBar()
+            sb.setValue(sb.maximum())
             print(f"RE-RUN SINGLE CELL — label {label_id} -> {info['n_new']} new label(s): {new_ids_str}")
             if porous_note:
                 print(f"  {porous_note.strip()}")
