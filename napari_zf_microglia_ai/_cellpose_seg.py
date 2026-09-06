@@ -849,7 +849,16 @@ def rerun_single_cell(volume, labels, label_id, model_path, cellprob=-2.5, flow=
         next_id += 1
     new_labels[crop_sl] = region
 
-    porous_recheck = compute_porosity(new_labels, solidity_threshold=solidity_threshold)
+    # Scoped to just this crop, not the whole fish -- compute_porosity()
+    # runs regionprops (a real, non-free 3D convex-hull computation) over
+    # every label it's given, and only spliced_ids' results are ever kept
+    # below anyway. Passing the full new_labels here used to mean every
+    # "Re-run This Cell Only" click recomputed solidity for every cell in
+    # the entire fish, not just the one(s) actually just re-run -- for a
+    # fish with dozens of cells this alone could take minutes, defeating
+    # the whole point of this being the fast, crop-scoped alternative to a
+    # full re-run.
+    porous_recheck = compute_porosity(new_labels[crop_sl], solidity_threshold=solidity_threshold)
     porous_recheck = {k: v for k, v in porous_recheck.items() if k in spliced_ids}
 
     info = dict(
