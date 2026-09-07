@@ -20,12 +20,25 @@ touch) -- just scoped to the growing local group instead of every label
 in the fish, and re-run from the ORIGINAL labels each attempt rather than
 compounding one attempt on top of the last.
 
-Neighbor discovery is intentionally never allowed to cascade past labels
-already confirmed to intersect the group in this same attempt -- Pass 2
-only ever runs once a given attempt found zero new neighbors from Pass 1
-AND from the touching-group analysis; if either surfaces one, the whole
-attempt is redone from scratch with the bigger group instead of applying
-Pass 2 to a group that might still be missing a member.
+Neighbor discovery (both modes) is deliberately narrow on two axes, to
+stop it ever cascading into an unrelated part of the fish:
+
+1. Only GENUINE TOUCHING adjacency counts, never mere presence nearby
+   -- a "how much padding is there room for" search would otherwise
+   keep finding *something* within an ever-growing box indefinitely.
+2. Only the ORIGINALLY-REQUESTED label(s)' own touches are ever
+   examined -- once a neighbor is folded into the group purely to
+   protect its own territory near the target, that neighbor's own
+   touches elsewhere are never looked at. A large/sprawling label
+   folded in this way can easily touch several other, completely
+   unrelated cells somewhere else in the fish; without this
+   restriction, discovering it would cascade the group into all of
+   those too, and then whatever THEY touch, and so on.
+
+In 3D, Pass 2 only ever runs once a given attempt found zero new
+neighbors this way; if it does find one, the whole attempt is redone
+from scratch with the bigger group instead of applying Pass 2 to a
+group that might still be missing a member.
 """
 
 from __future__ import annotations
@@ -105,26 +118,30 @@ def grow_correct_label_2d(
 
     for iteration in range(1, max_iterations + 1):
         used_pad = pad
-        labels_z = labels[z]
-        seed = np.isin(labels_z, sorted(group))
-        ys, xs = np.nonzero(seed)
-        y0 = max(int(ys.min()) - used_pad, 0)
-        y1 = min(int(ys.max()) + used_pad + 1, labels_z.shape[0])
-        x0 = max(int(xs.min()) - used_pad, 0)
-        x1 = min(int(xs.max()) + used_pad + 1, labels_z.shape[1])
-        foreign_ids = {
-            int(v) for v in np.unique(labels_z[y0:y1, x0:x1]) if v > 0
-        } - group
-        if foreign_ids:
-            group |= foreign_ids
-            group_grew = True
-            _report(f"Growing group to include neighbor(s) {sorted(foreign_ids)} -> {sorted(group)}")
-
         _report(f"Attempt {iteration}: pad={used_pad}px, group={sorted(group)}")
         new_labels, info = correct_label_group_2d(
             labels, image, sorted(group), z, lo, pad=used_pad, sigma=sigma,
         )
         last_new_labels, last_info = new_labels, info
+
+        # Discovery is driven ONLY by the originally-requested label(s)'
+        # own GENUINE TOUCHING adjacency (per_label_foreign_touching),
+        # never by "any label merely present somewhere in the padded
+        # box" (too permissive once the box grows large -- would keep
+        # finding *something* nearby indefinitely) and never by an
+        # already-folded-in neighbor's own touches (which could cascade
+        # the group into everything THAT label happens to touch,
+        # regardless of relevance to what was actually asked to be
+        # corrected).
+        new_neighbors: "set[int]" = set()
+        for lid in original_group:
+            new_neighbors.update(info["per_label_foreign_touching"].get(lid, []))
+        new_neighbors -= group
+        if new_neighbors:
+            group |= new_neighbors
+            group_grew = True
+            _report(f"Growing group to include neighbor(s) {sorted(new_neighbors)} -> {sorted(group)}, redoing this attempt")
+            continue  # redo with the bigger group, same pad
 
         # Convergence is judged ONLY on the originally-requested label(s)
         # -- a neighbor folded in purely to protect its own territory was
@@ -167,15 +184,22 @@ def grow_correct_label_3d(
     for the two-pass architecture (independent-per-label 3D walk, then
     joint re-derivation wherever the group ends up touching).
 
-    Neighbor discovery here is reactive rather than proactive (unlike
-    the 2D version): 3D's true Z-extent isn't known ahead of a walk the
-    way a 2D slice's XY bbox is, so there is nothing to pre-scan before
-    running Pass 1 at least once. A neighbor found via either Pass 1's
-    own foreign_touching/foreign_nearby reports, or via a touching group
-    (Pass 2 candidate) that includes a label outside the current group,
+    Neighbor discovery here is reactive: nothing is known about a
+    label's true 3D extent ahead of actually running Pass 1 on it, so
+    each attempt runs Pass 1 first and looks at what came out of it. A
+    neighbor is folded in only when it is GENUINELY TOUCHING one of the
+    originally-requested label(s)' own corrected shape -- from Pass 1's
+    own foreign_touching report (never foreign_nearby, which flags
+    anything merely present somewhere in the padded crop and gets more
+    permissive, not less, as the pad grows) or from a Pass 2 touching
+    group that includes a label outside the current group. Either way
     causes the WHOLE attempt to be redone from the original labels with
     the group expanded -- Pass 2 never runs on a group that might still
-    be missing a member.
+    be missing a member. An already-folded-in neighbor's own touches
+    elsewhere are never examined -- see grow_correct_label_3d's own
+    inline comments for why that matters (a large/sprawling neighbor
+    could otherwise cascade the group into everything IT happens to
+    touch, unrelated to what was actually asked to be corrected).
 
     Returns (new_labels, report): group, pad_used, n_iterations,
     converged, group_grew, per_label_reports (each group member's own
@@ -211,12 +235,35 @@ def grow_correct_label_3d(
             working, rep = correct_label_from_intensity_3d(
                 working, image, lid, lo, pad=used_pad,
                 min_volume=min_volume, final_min_fraction=final_min_fraction,
+                # Deliberately the FIXED initial_pad, not the growing
+                # used_pad: this bound exists only to stop a walk from
+                # leaking into a genuinely-touching-but-not-yet-corrected
+                # neighbor's own real signal and cascading along however
+                # far THAT signal extends -- legitimate Z-growth for this
+                # label's own real signal is already handled by the
+                # walk's own natural stop-when-nothing-connects logic, no
+                # extra room needed for that. If z_extent_pad grew in
+                # lockstep with used_pad (needed for genuinely large XY
+                # padding), it would eventually relax enough to reach the
+                # very neighbor it was meant to guard against.
+                z_extent_pad=initial_pad,
             )
             per_label_reports[lid] = rep
-            for ids in rep["foreign_touching"].values():
-                new_neighbors.update(ids)
-            for ids in rep["foreign_nearby"].values():
-                new_neighbors.update(ids)
+            # Discovery is driven ONLY by the originally-requested
+            # label(s)' own GENUINE TOUCHING adjacency (foreign_touching)
+            # -- never foreign_nearby, which flags anything merely
+            # PRESENT somewhere in the padded crop and gets more
+            # permissive, not less, as the pad grows (it would keep
+            # finding *something* nearby indefinitely). Also never an
+            # already-folded-in neighbor's own reports at all -- a
+            # neighbor added purely to protect its own territory near
+            # the target must not, in turn, cascade the group into
+            # everything IT happens to touch (which can span a totally
+            # different, unrelated part of the fish for a
+            # large/sprawling label).
+            if lid in original_group:
+                for ids in rep["foreign_touching"].values():
+                    new_neighbors.update(ids)
         new_neighbors -= group
 
         _report(f"Attempt {iteration}: Pass 2 (touching-group check)...")
@@ -224,8 +271,13 @@ def grow_correct_label_3d(
         pass2_jobs: "list[tuple[int, list[int]]]" = []
         for z, tgroups in groups_by_z.items():
             for tgroup in tgroups:
-                inter = set(tgroup) & group
-                if not inter:
+                # Same restriction as Pass 1 above: only a touching
+                # group that actually involves an originally-requested
+                # label is relevant here at all -- two already-folded-in
+                # (or wholly unrelated) labels touching each other
+                # somewhere else in the fish is simply none of this
+                # operation's business.
+                if not (set(tgroup) & original_group):
                     continue
                 extra = set(tgroup) - group
                 if extra:

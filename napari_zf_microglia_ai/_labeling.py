@@ -889,6 +889,7 @@ def correct_label_from_intensity_3d(
     pad: int = 15,
     min_volume: "int | None" = None,
     final_min_fraction: float = 0.618,
+    z_extent_pad: "int | None" = None,
 ) -> "tuple[np.ndarray, dict]":
     """
     3D version of correct_label_from_intensity(): corrects the WHOLE
@@ -969,6 +970,25 @@ def correct_label_from_intensity_3d(
                                inside _intensity_grow_2d makes that part
                                impossible by construction.)
 
+    z_extent_pad        : None (default, matches all prior behavior --
+                          unlimited walk in both directions, stopping
+                          only when nothing connects) or an int bounding
+                          how many slices beyond this label's OWN
+                          existing (pre-correction) Z-range the walk may
+                          travel in either direction. Exists for the
+                          auto-grow orchestrator (_grow_correct.py):
+                          without a bound, a single call can "leak" into
+                          a genuinely-touching-but-not-yet-corrected
+                          neighbor's own real signal (still unlabeled
+                          background from this call's point of view) and
+                          cascade along however far THAT neighbor's own
+                          signal happens to extend, long before a joint/
+                          Pass-2-style correction ever gets a chance to
+                          split the boundary properly -- bounding growth
+                          the same way pad already bounds XY keeps a
+                          single attempt's blast radius proportional to
+                          the padding actually requested.
+
     Raises ValueError if label_id isn't found anywhere in the volume,
     or if even the centroid slice can't be corrected (nothing connects
     to its own existing footprint there).
@@ -1013,11 +1033,19 @@ def correct_label_from_intensity_3d(
     slices_trimmed = set()
     n_trimmed_px = 0
 
+    z_orig_min = int(zs_with_label.min())
+    z_orig_max = int(zs_with_label.max())
+
     for direction, z_range in ((1, range(z_center + 1, z_dim)),
                                 (-1, range(z_center - 1, -1, -1))):
         prev_seed = center_seed_full
         stop_z = None
         for z in z_range:
+            if z_extent_pad is not None and (
+                z > z_orig_max + z_extent_pad or z < z_orig_min - z_extent_pad
+            ):
+                stop_z = z  # bounded stop: past this attempt's allowed Z reach
+                break
             result = _intensity_grow_2d(image[z], new_labels[z], label_id, lo, pad, prev_seed)
             if result is None:
                 stop_z = z  # natural stop: nothing here connects to the previous slice
@@ -1615,10 +1643,29 @@ def correct_label_group_2d(
     per_label_touched_border = {lid: _touches_border(finals[lid]) for lid in label_ids}
     touched_border = any(per_label_touched_border.values())
 
+    # Genuine physical adjacency (dilated-by-1) to a label OUTSIDE this
+    # group -- distinct from touched_border above and from the
+    # "anything present in the crop" notion correct_label_from_intensity_3d's
+    # own foreign_nearby uses. The auto-grow orchestrator needs exactly
+    # this stricter signal to decide whether to fold a new label into
+    # the group: "present somewhere in an ever-growing padded box" is
+    # far too permissive once the box gets big, and would keep pulling
+    # in unrelated labels indefinitely.
+    from scipy.ndimage import binary_dilation as _dilate2d
+    struct2d = np.ones((3, 3), dtype=bool)
+    per_label_foreign_touching: "dict[int, list[int]]" = {}
+    for lid in label_ids:
+        dilated = _dilate2d(finals[lid], structure=struct2d)
+        touching_here = crop[dilated & ~finals[lid]]
+        per_label_foreign_touching[lid] = sorted(
+            int(i) for i in np.unique(touching_here) if i != 0 and i not in label_ids
+        )
+
     info = {
         "n_lost": n_lost,
         "touched_border": touched_border,
         "per_label_touched_border": per_label_touched_border,
+        "per_label_foreign_touching": per_label_foreign_touching,
     }
     for lid in label_ids:
         info[lid] = int(finals[lid].sum())
