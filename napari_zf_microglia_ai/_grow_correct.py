@@ -18,7 +18,17 @@ independently per label; Pass 2: touching_groups_for_stack() +
 correct_label_group_2d() wherever the independently-corrected labels now
 touch) -- just scoped to the growing local group instead of every label
 in the fish, and re-run from the ORIGINAL labels each attempt rather than
-compounding one attempt on top of the last.
+compounding one attempt on top of the last. One deliberate difference
+from auto_contrast_correct_stack(): Pass 1's own expensive whole-cell
+walk only ever runs for the ORIGINALLY-REQUESTED label(s), never for a
+neighbor folded in purely to protect its own territory -- that neighbor
+was never asked to be corrected, and independently re-deriving its
+entire 3D extent (which can be large/complex/sprawling) just so Pass 2
+has a marker for the slice or two where it actually touches the target
+is wasted work Pass 2 doesn't need: a folded-in neighbor's own
+PRE-correction footprint is already a perfectly valid watershed marker
+(exactly how Correct Adjacent Labels works standalone, with no Pass-1
+pre-correction on either label at all).
 
 Neighbor discovery (both modes) is deliberately narrow on two axes, to
 stop it ever cascading into an unrelated part of the fish:
@@ -202,9 +212,11 @@ def grow_correct_label_3d(
     touch, unrelated to what was actually asked to be corrected).
 
     Returns (new_labels, report): group, pad_used, n_iterations,
-    converged, group_grew, per_label_reports (each group member's own
-    correct_label_from_intensity_3d() report from the final attempt,
-    keyed by label id).
+    converged, group_grew, per_label_reports (keyed by label id --
+    only the ORIGINALLY-REQUESTED label(s) get an entry, each its own
+    correct_label_from_intensity_3d() report from the final attempt; a
+    folded-in neighbor never gets one, since it never goes through
+    Pass 1 at all -- see the module docstring for why).
 
     Raises ValueError only if even the first attempt's single-label
     correction fails outright (same errors correct_label_from_intensity_3d()
@@ -230,8 +242,24 @@ def grow_correct_label_3d(
         per_label_reports: "dict[int, dict]" = {}
         new_neighbors: "set[int]" = set()
 
-        _report(f"Attempt {iteration}: pad={used_pad}px, group={sorted(group)} -- Pass 1 (independent per label)...")
-        for lid in sorted(group):
+        # Pass 1 only ever runs the expensive independent whole-cell 3D
+        # walk for the ORIGINALLY-REQUESTED label(s) -- never for a
+        # neighbor that got folded in purely to protect its own
+        # territory near the target. A folded-in neighbor was never
+        # asked to be corrected: recorrecting its ENTIRE 3D extent from
+        # its own centroid (which can be a large, complex, sprawling
+        # cell spanning most of the fish's own Z range) purely so Pass 2
+        # has a marker for the one or two slices where it actually
+        # touches the target is pure wasted work -- and, on a real
+        # production fish, was the dominant cost of this whole
+        # operation. Pass 2 below only needs each group member's
+        # CURRENT existing footprint as a watershed marker (exactly how
+        # Correct Adjacent Labels already works standalone, with no
+        # Pass-1-style pre-correction on either label at all) -- a
+        # folded-in neighbor's pre-correction footprint is a perfectly
+        # valid marker for that.
+        _report(f"Attempt {iteration}: pad={used_pad}px, group={sorted(group)} -- Pass 1 (independent, original label(s) only)...")
+        for lid in sorted(group & original_group):
             working, rep = correct_label_from_intensity_3d(
                 working, image, lid, lo, pad=used_pad,
                 min_volume=min_volume, final_min_fraction=final_min_fraction,
@@ -254,16 +282,13 @@ def grow_correct_label_3d(
             # -- never foreign_nearby, which flags anything merely
             # PRESENT somewhere in the padded crop and gets more
             # permissive, not less, as the pad grows (it would keep
-            # finding *something* nearby indefinitely). Also never an
-            # already-folded-in neighbor's own reports at all -- a
-            # neighbor added purely to protect its own territory near
-            # the target must not, in turn, cascade the group into
-            # everything IT happens to touch (which can span a totally
-            # different, unrelated part of the fish for a
-            # large/sprawling label).
-            if lid in original_group:
-                for ids in rep["foreign_touching"].values():
-                    new_neighbors.update(ids)
+            # finding *something* nearby indefinitely). A folded-in
+            # neighbor never gets its own Pass 1 report at all now (see
+            # above), so this loop naturally can't cascade off one --
+            # this filter is kept anyway as the single source of truth
+            # for "whose touching-adjacency matters here".
+            for ids in rep["foreign_touching"].values():
+                new_neighbors.update(ids)
         new_neighbors -= group
 
         _report(f"Attempt {iteration}: Pass 2 (touching-group check)...")
