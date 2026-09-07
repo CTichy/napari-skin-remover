@@ -67,7 +67,6 @@ def _detect_backend() -> tuple[str, object, object]:
 _BACKEND, _CP, _CPND = _detect_backend()
 _N_THREADS = max(1, (os.cpu_count() or 4) // 2)
 
-
 def _free_gpu_cache() -> None:
     """Free CuPy and PyTorch GPU memory pools to prevent OOM."""
     if _CP is not None:
@@ -1259,7 +1258,7 @@ def _intensity_correct_2d(
                          caller to splice back with
 
     Raises ValueError if label_id isn't on this slice, or if the threshold
-    leaves nothing connected to the label's existing footprint.
+    leaves no signal at all in the padded region.
     """
     existing = labels_z == label_id
     if not np.any(existing):
@@ -1268,8 +1267,8 @@ def _intensity_correct_2d(
     result = _intensity_grow_2d(image_z, labels_z, label_id, lo, pad, existing)
     if result is None:
         raise ValueError(
-            f"threshold >= {lo} leaves nothing connected to "
-            f"label {label_id}'s existing footprint -- refusing to erase "
+            f"threshold >= {lo} leaves no signal at all in the padded "
+            f"region around label {label_id} -- refusing to erase "
             f"the label; adjust the contrast window and try again."
         )
     corrected, crop_seed, bbox = result
@@ -1299,10 +1298,23 @@ def _intensity_grow_2d(
                 "the Z-walk should stop here", since that's a different
                 error for each caller)
 
+    Fills the WHOLE padded crop with candidate signal -- every pixel at
+    or above `lo` that isn't already claimed by a different label
+    becomes part of the result, regardless of whether it's connected to
+    seed_mask. Deliberately not connected-component-restricted: real
+    cell boundaries are often irregular/branchy, and a human eye
+    reading the same contrast window would count a visibly-present
+    blob as part of the cell whether or not it happens to touch the
+    label's existing pixels at this exact threshold -- a stricter
+    "must already connect" rule would silently discard signal that's
+    plainly there. seed_mask itself is only used to size the crop
+    (bbox around it, + pad); it does not gate which candidate pixels
+    survive.
+
     Returns (corrected, crop_seed, (y0,y1,x0,x1)) within the crop only
     -- same convention _intensity_correct_2d() already returned.
-    Returns None (not an exception) if the threshold leaves nothing
-    connected to seed_mask -- the caller decides what that means.
+    Returns None (not an exception) if the threshold leaves no signal
+    at all in the padded crop -- the caller decides what that means.
     """
     ys, xs = np.nonzero(seed_mask)
     y0 = max(int(ys.min()) - pad, 0)
@@ -1318,13 +1330,9 @@ def _intensity_grow_2d(
     foreign = (crop_labels != 0) & (crop_labels != label_id)
     candidate &= ~foreign  # never claim another label's territory
 
-    cc, _ = cpu_label(candidate)
-    keep_ids = set(np.unique(cc[crop_seed & (cc > 0)]))
-    keep_ids.discard(0)
-    if not keep_ids:
+    if not candidate.any():
         return None
-    corrected = np.isin(cc, list(keep_ids))
-    return corrected, crop_seed, (y0, y1, x0, x1)
+    return candidate, crop_seed, (y0, y1, x0, x1)
 
 
 def correct_adjacent_labels_2d(
@@ -1432,17 +1440,20 @@ def correct_adjacent_labels_2d(
     foreign = (crop_labels != 0) & (crop_labels != label_a) & (crop_labels != label_b)
     candidate &= ~foreign  # a THIRD label's territory is still off-limits
 
-    cc, _ = cpu_label(candidate)
-    keep_ids = set(np.unique(cc[crop_seed & (cc > 0)]))
-    keep_ids.discard(0)
-    if not keep_ids:
+    # The whole padded crop's candidate signal becomes the combined
+    # region to split below -- not connected-component-restricted to
+    # what already touches label_a/label_b (see _intensity_grow_2d's
+    # own docstring for why: real cell boundaries are often irregular,
+    # and a visibly-present blob within the crop should count even if
+    # it isn't already touching either label's existing pixels).
+    combined = candidate
+    if not combined.any():
         raise ValueError(
-            f"threshold >= {lo} leaves nothing connected to either label "
-            f"{label_a} or {label_b}'s existing footprint on slice {z} -- "
+            f"threshold >= {lo} leaves no signal at all in the padded "
+            f"region around labels {label_a}/{label_b} on slice {z} -- "
             f"refusing to erase both labels; adjust the contrast window "
             f"and try again."
         )
-    combined = np.isin(cc, list(keep_ids))
 
     # Marker-seeded watershed: markers are exactly each label's own
     # EXISTING footprint (not auto-detected peaks) -- floods outward from
@@ -1457,14 +1468,22 @@ def correct_adjacent_labels_2d(
     else:
         crop_image_smooth = crop_image.astype(np.float32)
 
+    # Unmasked watershed: floods the WHOLE crop by nearest marker (not
+    # gated by connectivity to `combined`), so a candidate island that
+    # only touches label_a/label_b diagonally -- or with a real gap in
+    # this one slice that's actually bridged through Z in the true 3D
+    # structure -- still gets assigned an owner instead of being
+    # silently dropped by a mask-connectivity requirement. The result
+    # is intersected with `combined` right after, so non-signal pixels
+    # never survive regardless of which side of the divide they fall on.
     markers = np.zeros(combined.shape, dtype=np.int32)
     markers[crop_a] = 1
     markers[crop_b] = 2
-    split_crop = watershed(-crop_image_smooth, markers, mask=combined)
+    split_crop = watershed(-crop_image_smooth, markers)
     split_crop = _clear_split_interface(split_crop)
 
-    crop_final_a = split_crop == 1
-    crop_final_b = split_crop == 2
+    crop_final_a = (split_crop == 1) & combined
+    crop_final_b = (split_crop == 2) & combined
     if not np.any(crop_final_a) or not np.any(crop_final_b):
         # A marker with no candidate pixels of its own reachable within
         # `combined` gets 0 output pixels from skimage's watershed,
@@ -1570,17 +1589,18 @@ def correct_label_group_2d(
     foreign = (crop_labels != 0) & (~np.isin(crop_labels, list(label_ids)))
     candidate &= ~foreign  # any label OUTSIDE this group is still off-limits
 
-    cc, _ = cpu_label(candidate)
-    keep_ids = set(np.unique(cc[crop_seed & (cc > 0)]))
-    keep_ids.discard(0)
-    if not keep_ids:
+    # The whole padded crop's candidate signal becomes the combined
+    # region to split below -- not connected-component-restricted to
+    # what already touches the group's existing footprints (see
+    # _intensity_grow_2d's own docstring for why).
+    combined = candidate
+    if not combined.any():
         raise ValueError(
-            f"threshold >= {lo} leaves nothing connected to any of "
-            f"{list(label_ids)}'s existing footprint on slice {z} -- "
-            f"refusing to erase the whole group; adjust the contrast "
-            f"window and try again."
+            f"threshold >= {lo} leaves no signal at all in the padded "
+            f"region around {list(label_ids)} on slice {z} -- refusing "
+            f"to erase the whole group; adjust the contrast window and "
+            f"try again."
         )
-    combined = np.isin(cc, list(keep_ids))
 
     # Marker-seeded watershed: markers are exactly each label's own
     # EXISTING footprint (not auto-detected peaks) -- see
@@ -1591,16 +1611,22 @@ def correct_label_group_2d(
     else:
         crop_image_smooth = crop_image.astype(np.float32)
 
+    # Unmasked watershed -- see correct_adjacent_labels_2d()'s own
+    # comment on this exact same pattern: floods the whole crop by
+    # nearest marker so a candidate island not connected (even
+    # diagonally, even at all within this one slice) to any group
+    # member's existing footprint still gets assigned an owner, then
+    # gets intersected with `combined` so only real signal survives.
     markers = np.zeros(combined.shape, dtype=np.int32)
     for i, lid in enumerate(label_ids, start=1):
         markers[crop_existing[lid]] = i
-    split_crop = watershed(-crop_image_smooth, markers, mask=combined)
+    split_crop = watershed(-crop_image_smooth, markers)
     split_crop = _clear_split_interface(split_crop)
 
     finals = {}
     empties = []
     for i, lid in enumerate(label_ids, start=1):
-        finals[lid] = split_crop == i
+        finals[lid] = (split_crop == i) & combined
         if not np.any(finals[lid]):
             empties.append(lid)
     if empties:
