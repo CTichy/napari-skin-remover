@@ -720,6 +720,19 @@ Click **Correct Label**. A neighboring label's own pixels are never touched, abs
 
 If [Soften label contours (sanding)](#soften-label-contours-sanding-after-any-label-correction) (Common Settings) is checked — the default — the corrected label is sanded immediately afterward, in either mode: same foreign-label protection, purely geometric, rounds off blocky edges left by the intensity-threshold correction. The status line reports whether it was applied.
 
+#### Auto-grow until signal clears the border
+
+**Default: off.** A fixed padding can cut off real signal that genuinely extends further than expected — the correction fills the padded box as far as it can, but has no way to tell "the cell truly ends here" from "the box ran out of room." This checkbox catches that: if the corrected result touches the edge of its own padded box (the box's own edge, not the true image boundary — reaching the actual edge of the volume is never flagged, since there's nothing more to grow into there anyway), it automatically retries with a bigger box, repeating until the result stops touching the edge or the iteration limit is hit.
+
+- **Growth step (px)** — how much the padding grows each retry (default 15, same as the base padding default).
+- **Max growth iterations** — hard cap on retries (default 5), so this can never grow unbounded. If it's still touching the border after the cap, the tool stops and tells you rather than continuing to grow — a real signal that the cell may extend even further, worth a manual look (a bigger starting pad, or correcting by hand).
+
+**If the growing box starts overlapping a different label**, that label is automatically folded into the correction instead of being encroached on — the tool switches to the same joint, foreign-protected correction [Correct Adjacent Labels](#correct-adjacent-labels) uses (generalized to any number of labels, not just two), so growth can never silently eat into a neighbor's territory. The status line reports if the group grew this way.
+
+In **3D mode**, this uses a real 3D group correction when the group grows beyond one label: each label in the group is corrected independently first (the same whole-cell walk described above, run once per label), then wherever any of them end up touching on a given slice, that slice is re-derived jointly — the same two-pass idea [Cellpose-SAM's own auto-correct stage](#6c-cellpose-sam-segmentation) uses for a whole fish, just scoped to this specific group instead of every cell. A final debris-cleanup pass (same golden-ratio floor as everywhere else) runs once at the end, scoped to just this group's own labels.
+
+Sanding (if enabled) runs on every label in the final group, not just the one you originally targeted.
+
 ---
 
 ### Copy Label to Adjacent Slice
@@ -751,6 +764,8 @@ For two labels that end up touching or merged on **one slice** — two real cell
 Click **Correct Adjacent Labels**. A third, unrelated label is never touched, absorbed, or grown into — same protection as every other Correct Label tool. If the threshold leaves one label's own existing footprint with nothing to anchor to at all, the tool refuses rather than silently erasing that label — adjust the contrast window and try again. The status message reports each label's final pixel count and how many pixels (if any) were lost right at the cut boundary.
 
 If [Soften label contours (sanding)](#soften-label-contours-sanding-after-any-label-correction) (Common Settings) is checked — the default — **both** Label A and Label B are sanded immediately afterward, each independently, same foreign-label protection. The status message reports how many of the two were actually softened.
+
+**Auto-grow until signal clears the border** — same behavior as [Correct Label's own auto-grow](#auto-grow-until-signal-clears-the-border), just seeded with both Label A and Label B from the start instead of one label. If growth reveals a third label, it's folded into the joint correction too. Same **Growth step (px)** / **Max growth iterations** fields, same non-convergence reporting.
 
 ---
 
@@ -1891,9 +1906,9 @@ Shown automatically based on active layer suffix — `_ExtRm` → Cellpose-SAM, 
 | Split σ | 1.0 | Smoothness for watershed split |
 | Min distance | 5 | Peak separation for split detection |
 | Join Labels | — | Merges Label B into Label A — the inverse of Split Label |
-| Correct Label | 2D mode | Regenerates a label's shape from the signal layer's live contrast window — 2D (current slice) or 3D (whole cell from centroid, walks outward, trims false-positive extension beyond real signal, auto debris cleanup, reports nearby/touching foreign labels) |
+| Correct Label | 2D mode | Regenerates a label's shape from the signal layer's live contrast window — 2D (current slice) or 3D (whole cell from centroid, walks outward, trims false-positive extension beyond real signal, auto debris cleanup, reports nearby/touching foreign labels) — optional auto-grow retries with a bigger pad if signal reaches the box edge, auto-folding in neighbors instead of encroaching |
 | Copy Label to Adjacent Slice | — | Copies a label's shape from the current slice onto the next/previous slice |
-| Correct Adjacent Labels | 2D only | Jointly corrects two touching labels on the current slice, cut placed by watershed seeded at each label's own existing footprint |
+| Correct Adjacent Labels | 2D only | Jointly corrects two touching labels on the current slice, cut placed by watershed seeded at each label's own existing footprint — same optional auto-grow as Correct Label, seeded with both labels |
 
 ### Tab 3 — Statistics
 

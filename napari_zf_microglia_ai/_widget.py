@@ -44,6 +44,7 @@ from ._cellpose_seg import rerun_single_cell as _rerun_single_cell
 from ._cellpose_seg import masks_from_flows as _masks_from_flows
 from ._auto_correction import auto_contrast_correct_stack, format_auto_correction_report
 from ._sanding import sand_labels_stack, format_sanding_report, sanding_pad
+from ._grow_correct import grow_correct_label_2d, grow_correct_label_3d, format_grow_report
 from . import _pixel_sweep as _psw
 from . import _brain_sweep as _bsw
 from . import _gt_score as _gts
@@ -2440,6 +2441,41 @@ class ZFMicrogliaAIWidget(QWidget):
         correct_pad_row.addWidget(self._correct_pad_spin)
         dlt.addLayout(correct_pad_row)
 
+        self._correct_grow_cb = QCheckBox("Auto-grow until signal clears the border")
+        dlt.addWidget(self._correct_grow_cb)
+        correct_grow_note = QLabel(
+            "  Retries with a bigger padded box whenever the corrected label's own "
+            "edge touches the box's border, to catch real signal a too-small pad "
+            "would otherwise cut off. If growth starts overlapping a neighboring "
+            "label, that neighbor is automatically folded into a joint correction "
+            "instead of being encroached on -- 3D mode does this with a real 3D "
+            "group correction (independent-per-label pass, then a joint "
+            "re-derivation wherever the group ends up touching), not just "
+            "per-slice. If it still touches the border after the max iterations "
+            "below, it stops and tells you rather than growing forever."
+        )
+        correct_grow_note.setWordWrap(True)
+        correct_grow_note.setStyleSheet("color: #888; font-size: 10px;")
+        dlt.addWidget(correct_grow_note)
+
+        correct_growstep_row = QHBoxLayout()
+        correct_growstep_row.addWidget(QLabel("Growth step (px):"))
+        self._correct_growstep_spin = QSpinBox()
+        self._correct_growstep_spin.setMinimum(1)
+        self._correct_growstep_spin.setMaximum(200)
+        self._correct_growstep_spin.setValue(15)
+        correct_growstep_row.addWidget(self._correct_growstep_spin)
+        dlt.addLayout(correct_growstep_row)
+
+        correct_maxiter_row = QHBoxLayout()
+        correct_maxiter_row.addWidget(QLabel("Max growth iterations:"))
+        self._correct_maxiter_spin = QSpinBox()
+        self._correct_maxiter_spin.setMinimum(1)
+        self._correct_maxiter_spin.setMaximum(50)
+        self._correct_maxiter_spin.setValue(5)
+        correct_maxiter_row.addWidget(self._correct_maxiter_spin)
+        dlt.addLayout(correct_maxiter_row)
+
         self._correct_btn = QPushButton("Correct Label")
         self._correct_btn.setStyleSheet("QPushButton { padding: 5px; }")
         dlt.addWidget(self._correct_btn)
@@ -2558,6 +2594,35 @@ class ZFMicrogliaAIWidget(QWidget):
         self._adjcorr_pad_spin.setValue(15)
         adjcorr_pad_row.addWidget(self._adjcorr_pad_spin)
         dlt.addLayout(adjcorr_pad_row)
+
+        self._adjcorr_grow_cb = QCheckBox("Auto-grow until signal clears the border")
+        dlt.addWidget(self._adjcorr_grow_cb)
+        adjcorr_grow_note = QLabel(
+            "  Same auto-grow behavior as Correct Label above, seeded with BOTH "
+            "labels from the start instead of just one. If growth reveals a third "
+            "label, it's folded into the joint correction too."
+        )
+        adjcorr_grow_note.setWordWrap(True)
+        adjcorr_grow_note.setStyleSheet("color: #888; font-size: 10px;")
+        dlt.addWidget(adjcorr_grow_note)
+
+        adjcorr_growstep_row = QHBoxLayout()
+        adjcorr_growstep_row.addWidget(QLabel("Growth step (px):"))
+        self._adjcorr_growstep_spin = QSpinBox()
+        self._adjcorr_growstep_spin.setMinimum(1)
+        self._adjcorr_growstep_spin.setMaximum(200)
+        self._adjcorr_growstep_spin.setValue(15)
+        adjcorr_growstep_row.addWidget(self._adjcorr_growstep_spin)
+        dlt.addLayout(adjcorr_growstep_row)
+
+        adjcorr_maxiter_row = QHBoxLayout()
+        adjcorr_maxiter_row.addWidget(QLabel("Max growth iterations:"))
+        self._adjcorr_maxiter_spin = QSpinBox()
+        self._adjcorr_maxiter_spin.setMinimum(1)
+        self._adjcorr_maxiter_spin.setMaximum(50)
+        self._adjcorr_maxiter_spin.setValue(5)
+        adjcorr_maxiter_row.addWidget(self._adjcorr_maxiter_spin)
+        dlt.addLayout(adjcorr_maxiter_row)
 
         self._adjcorr_btn = QPushButton("Correct Adjacent Labels")
         self._adjcorr_btn.setStyleSheet("QPushButton { padding: 5px; }")
@@ -6673,6 +6738,21 @@ class ZFMicrogliaAIWidget(QWidget):
         sand_sigma_z = self._sanding_sigz_slider.value()
         sand_pad = sanding_pad(sand_sigma_xy, sand_sigma_z)
 
+        grow_on = self._correct_grow_cb.isChecked()
+        growth_step = self._correct_growstep_spin.value()
+        max_iterations = self._correct_maxiter_spin.value()
+
+        def _sand_group(new_labels, group_ids):
+            """Sand every label in group_ids (1+), skipping already-
+            sanded/failed ones gracefully -- mirrors Correct Adjacent
+            Labels' own multi-label sanding loop."""
+            sand_infos = {}
+            for lid in group_ids:
+                new_labels, sand_infos[lid] = sand_label(
+                    new_labels, lid, sand_sigma_xy, sand_sigma_z, pad=sand_pad
+                )
+            return new_labels, sand_infos
+
         self._correct_btn.setEnabled(False)
         self._correct_report_view.hide()
         self._correct_report_view.clear()
@@ -6688,13 +6768,23 @@ class ZFMicrogliaAIWidget(QWidget):
 
             def _worker():
                 try:
-                    new_labels = correct_label_from_intensity(
-                        labels, image, label_id, z, lo, hi, pad=pad
-                    )
-                    if sanding_on:
-                        new_labels, result["sanding_info"] = sand_label(
-                            new_labels, label_id, sand_sigma_xy, sand_sigma_z, pad=sand_pad
+                    if grow_on:
+                        new_labels, grow_report = grow_correct_label_2d(
+                            labels, image, label_id, z, lo,
+                            initial_pad=pad, growth_step=growth_step, max_iterations=max_iterations,
                         )
+                        result["grow_report"] = grow_report
+                        if sanding_on:
+                            new_labels, result["sanding_info"] = _sand_group(new_labels, grow_report["group"])
+                    else:
+                        new_labels = correct_label_from_intensity(
+                            labels, image, label_id, z, lo, hi, pad=pad
+                        )
+                        if sanding_on:
+                            new_labels, si = sand_label(
+                                new_labels, label_id, sand_sigma_xy, sand_sigma_z, pad=sand_pad
+                            )
+                            result["sanding_info"] = {label_id: si}
                     result["labels"] = new_labels
                 except Exception as exc:
                     traceback.print_exc()
@@ -6709,14 +6799,25 @@ class ZFMicrogliaAIWidget(QWidget):
 
             def _worker():
                 try:
-                    new_labels, result["report"] = correct_label_from_intensity_3d(
-                        labels, image, label_id, lo, pad=pad,
-                        min_volume=min_volume, final_min_fraction=final_min_fraction,
-                    )
-                    if sanding_on:
-                        new_labels, result["sanding_info"] = sand_label(
-                            new_labels, label_id, sand_sigma_xy, sand_sigma_z, pad=sand_pad
+                    if grow_on:
+                        new_labels, grow_report = grow_correct_label_3d(
+                            labels, image, label_id, lo,
+                            initial_pad=pad, growth_step=growth_step, max_iterations=max_iterations,
+                            min_volume=min_volume, final_min_fraction=final_min_fraction,
                         )
+                        result["grow_report"] = grow_report
+                        if sanding_on:
+                            new_labels, result["sanding_info"] = _sand_group(new_labels, grow_report["group"])
+                    else:
+                        new_labels, result["report"] = correct_label_from_intensity_3d(
+                            labels, image, label_id, lo, pad=pad,
+                            min_volume=min_volume, final_min_fraction=final_min_fraction,
+                        )
+                        if sanding_on:
+                            new_labels, si = sand_label(
+                                new_labels, label_id, sand_sigma_xy, sand_sigma_z, pad=sand_pad
+                            )
+                            result["sanding_info"] = {label_id: si}
                     result["labels"] = new_labels
                 except Exception as exc:
                     traceback.print_exc()
@@ -6739,15 +6840,32 @@ class ZFMicrogliaAIWidget(QWidget):
             lyr.data[:] = result["labels"]  # in-place -- see Resort Labels above for why
             lyr.refresh()
 
-            sand_info = result.get("sanding_info")
+            # sanding_info is now {label_id: info} -- covers every label in
+            # the (possibly grow-expanded) group, not just the original target.
+            sand_infos = result.get("sanding_info") or {}
             sand_note = ""
-            if sand_info is not None:
-                sand_note = (
-                    " Sanded." if sand_info["applied"]
-                    else f" Sanding skipped ({sand_info['reason']})."
-                )
+            if sand_infos:
+                n_applied = sum(1 for i in sand_infos.values() if i["applied"])
+                sand_note = f" Sanded {n_applied}/{len(sand_infos)} label(s)."
 
-            if mode == "2d":
+            if "grow_report" in result:
+                gr = result["grow_report"]
+                grow_mode_label = "2D" if mode == "2d" else "3D"
+                report_lines = [format_grow_report(gr, grow_mode_label)]
+                if mode == "3d":
+                    for lid, rep in gr["per_label_reports"].items():
+                        if rep["foreign_touching"] or rep["foreign_nearby"]:
+                            report_lines.append(f"  label {lid} foreign_touching={rep['foreign_touching']} foreign_nearby={rep['foreign_nearby']}")
+                self._correct_report_view.setPlainText("\n".join(report_lines))
+                self._correct_report_view.show()
+                converged_note = "" if gr["converged"] else " -- NOT converged, still touches the border"
+                group_note = f" (group grew to {gr['group']})" if gr["group_grew"] else ""
+                self._correct_status_lbl.setText(
+                    f"Done — label {label_id} auto-grow corrected in {grow_mode_label}, "
+                    f"{gr['n_iterations']} attempt(s), final pad={gr['pad_used']}px{group_note}"
+                    f"{converged_note}.{sand_note} See report below."
+                )
+            elif mode == "2d":
                 self._correct_status_lbl.setText(
                     f"Done — label {label_id} regenerated on slice {z} "
                     f"(signal = intensity >= {lo:.3g}).{sand_note}"
@@ -6930,6 +7048,10 @@ class ZFMicrogliaAIWidget(QWidget):
         sand_sigma_z = self._sanding_sigz_slider.value()
         sand_pad = sanding_pad(sand_sigma_xy, sand_sigma_z)
 
+        grow_on = self._adjcorr_grow_cb.isChecked()
+        growth_step = self._adjcorr_growstep_spin.value()
+        max_iterations = self._adjcorr_maxiter_spin.value()
+
         self._adjcorr_btn.setEnabled(False)
         self._adjcorr_status_lbl.setText(
             f"Correcting labels {label_a} and {label_b} together on slice "
@@ -6940,12 +7062,21 @@ class ZFMicrogliaAIWidget(QWidget):
 
         def _worker():
             try:
-                new_labels, result["info"] = correct_adjacent_labels_2d(
-                    labels, image, label_a, label_b, z, lo, pad=pad
-                )
+                if grow_on:
+                    new_labels, grow_report = grow_correct_label_2d(
+                        labels, image, [label_a, label_b], z, lo,
+                        initial_pad=pad, growth_step=growth_step, max_iterations=max_iterations,
+                    )
+                    result["grow_report"] = grow_report
+                    group_ids = grow_report["group"]
+                else:
+                    new_labels, result["info"] = correct_adjacent_labels_2d(
+                        labels, image, label_a, label_b, z, lo, pad=pad
+                    )
+                    group_ids = [label_a, label_b]
                 if sanding_on:
                     sand_infos = {}
-                    for lid in (label_a, label_b):
+                    for lid in group_ids:
                         new_labels, sand_infos[lid] = sand_label(
                             new_labels, lid, sand_sigma_xy, sand_sigma_z, pad=sand_pad
                         )
@@ -6971,17 +7102,28 @@ class ZFMicrogliaAIWidget(QWidget):
                 return
             lyr.data[:] = result["labels"]  # in-place -- see Resort Labels above for why
             lyr.refresh()
-            info = result["info"]
-            lost_note = f", {info['n_lost']} px lost at the cut" if info["n_lost"] > 0 else ""
             sand_infos = result.get("sanding_info")
             sand_note = ""
             if sand_infos is not None:
                 n_applied = sum(1 for i in sand_infos.values() if i["applied"])
                 sand_note = f" Sanded {n_applied}/{len(sand_infos)} label(s)."
-            self._adjcorr_status_lbl.setText(
-                f"Done — slice {z}: label {label_a}={info['n_a']} px, "
-                f"label {label_b}={info['n_b']} px{lost_note}.{sand_note}"
-            )
+
+            if "grow_report" in result:
+                gr = result["grow_report"]
+                converged_note = "" if gr["converged"] else " -- NOT converged, still touches the border"
+                group_note = f", group grew to {gr['group']}" if gr["group_grew"] else ""
+                self._adjcorr_status_lbl.setText(
+                    f"Done — slice {z}: auto-grow corrected labels {label_a}/{label_b}, "
+                    f"{gr['n_iterations']} attempt(s), final pad={gr['pad_used']}px{group_note}"
+                    f"{converged_note}.{sand_note}"
+                )
+            else:
+                info = result["info"]
+                lost_note = f", {info['n_lost']} px lost at the cut" if info["n_lost"] > 0 else ""
+                self._adjcorr_status_lbl.setText(
+                    f"Done — slice {z}: label {label_a}={info['n_a']} px, "
+                    f"label {label_b}={info['n_b']} px{lost_note}.{sand_note}"
+                )
             self._adjcorr_btn.setEnabled(True)
 
         timer.timeout.connect(_poll)

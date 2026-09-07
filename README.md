@@ -215,9 +215,9 @@ Requires a **Cellpose-SAM checkpoint** — this is a project-specific fine-tuned
 - **Remove Debris** — sweeps the active layer for anything below the golden-ratio-relaxed volume floor, per connected fragment (not per label ID)
 - **Split Label** — watershed split of a merged blob into N parts
 - **Join Labels** — the inverse of Split: merges Label B into Label A
-- **Correct Label** — regenerates a label's shape (2D current slice, or 3D whole cell from centroid) from the signal layer's own live contrast window (signal = intensity at/above the lower contrast limit)
+- **Correct Label** — regenerates a label's shape (2D current slice, or 3D whole cell from centroid) from the signal layer's own live contrast window (signal = intensity at/above the lower contrast limit) — optional **auto-grow**: retries with a bigger padded box if the result touches the box's own edge (catching signal a too-small pad would cut off), auto-folding in any neighboring label the growing box reaches instead of encroaching on it, capped at a configurable max number of retries
 - **Copy Label to Adjacent Slice** — copies a label's shape from the current slice onto the next/previous slice, e.g. to patch a broken/missing cross-section
-- **Correct Adjacent Labels** — jointly regenerates two touching labels on the current slice, cut placed by watershed seeded at each label's own existing footprint
+- **Correct Adjacent Labels** — jointly regenerates two touching labels on the current slice, cut placed by watershed seeded at each label's own existing footprint — same auto-grow option as Correct Label, seeded with both labels from the start
 - **Soften label contours (sanding)** — shared Common Settings checkbox, on by default: after Correct Label, Correct Adjacent Labels, or Cellpose-SAM's own auto-correct stage, the touched label(s) get their contours smoothed (foreign-protected, purely geometric — rounds off blocky voxel edges without reshaping the cell)
 - **Save Labels** — explicit file dialog (edit labels in napari before saving)
 

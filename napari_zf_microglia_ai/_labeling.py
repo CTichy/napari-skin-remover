@@ -1062,6 +1062,8 @@ def correct_label_from_intensity_3d(
     from scipy.ndimage import binary_dilation
     foreign_touching: "dict[int, list[int]]" = {}
     foreign_nearby: "dict[int, list[int]]" = {}
+    border_touching_slices: "list[int]" = []
+    Y_dim, X_dim = new_labels.shape[1], new_labels.shape[2]
     for z in sorted(slices_corrected):
         own = new_labels[z] == label_id
         if not np.any(own):
@@ -1078,6 +1080,22 @@ def correct_label_from_intensity_3d(
         if nearby_ids:
             foreign_nearby[z] = nearby_ids
 
+        # Did the correction reach the edge of its own PADDED crop -- not
+        # the true image edge, where there's nothing more to grow into
+        # anyway? A pad-imposed edge being touched is the signal that
+        # real signal may have been cut off by too little padding, used
+        # by the auto-grow orchestrator (_grow_correct.py) to decide
+        # whether to retry with a bigger pad.
+        crop_own = own[gy0:gy1, gx0:gx1]
+        touched = (
+            (gy0 > 0 and bool(crop_own[0, :].any()))
+            or (gy1 < Y_dim and bool(crop_own[-1, :].any()))
+            or (gx0 > 0 and bool(crop_own[:, 0].any()))
+            or (gx1 < X_dim and bool(crop_own[:, -1].any()))
+        )
+        if touched:
+            border_touching_slices.append(z)
+
     report = {
         "z_center": z_center,
         "slices_corrected": sorted(slices_corrected),
@@ -1086,6 +1104,8 @@ def correct_label_from_intensity_3d(
         "n_debris_removed_px": n_debris_removed_px,
         "foreign_touching": foreign_touching,
         "foreign_nearby": foreign_nearby,
+        "border_touching_slices": sorted(border_touching_slices),
+        "touched_border": bool(border_touching_slices),
     }
     return new_labels.astype(np.int32), report
 
@@ -1573,7 +1593,19 @@ def correct_label_group_2d(
         any_final |= finals[lid]
     n_lost = int((crop_seed & ~any_final).sum())
 
-    info = {"n_lost": n_lost}
+    # Same border-touch signal as correct_label_from_intensity_3d's own
+    # per-slice check -- only a PADDED (not true image) edge counts, and
+    # any member of the group touching it is enough to flag the whole
+    # group, since the auto-grow orchestrator retries the group together.
+    Y_dim, X_dim = labels_z.shape
+    touched_border = bool(
+        (y0 > 0 and any_final[0, :].any())
+        or (y1 < Y_dim and any_final[-1, :].any())
+        or (x0 > 0 and any_final[:, 0].any())
+        or (x1 < X_dim and any_final[:, -1].any())
+    )
+
+    info = {"n_lost": n_lost, "touched_border": touched_border}
     for lid in label_ids:
         info[lid] = int(finals[lid].sum())
     return new_labels.astype(np.int32), info
