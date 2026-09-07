@@ -1594,18 +1594,32 @@ def correct_label_group_2d(
     n_lost = int((crop_seed & ~any_final).sum())
 
     # Same border-touch signal as correct_label_from_intensity_3d's own
-    # per-slice check -- only a PADDED (not true image) edge counts, and
-    # any member of the group touching it is enough to flag the whole
-    # group, since the auto-grow orchestrator retries the group together.
+    # per-slice check -- only a PADDED (not true image) edge counts.
+    # Reported BOTH per-label and as a group-wide OR: the auto-grow
+    # orchestrator only wants to keep growing because of labels it was
+    # actually asked to correct, not a neighbor that got folded in
+    # purely to protect its own territory -- per_label_touched_border
+    # lets it filter to just the labels it cares about, while
+    # touched_border (any member) stays for any caller that doesn't
+    # need that distinction.
     Y_dim, X_dim = labels_z.shape
-    touched_border = bool(
-        (y0 > 0 and any_final[0, :].any())
-        or (y1 < Y_dim and any_final[-1, :].any())
-        or (x0 > 0 and any_final[:, 0].any())
-        or (x1 < X_dim and any_final[:, -1].any())
-    )
 
-    info = {"n_lost": n_lost, "touched_border": touched_border}
+    def _touches_border(mask: np.ndarray) -> bool:
+        return bool(
+            (y0 > 0 and mask[0, :].any())
+            or (y1 < Y_dim and mask[-1, :].any())
+            or (x0 > 0 and mask[:, 0].any())
+            or (x1 < X_dim and mask[:, -1].any())
+        )
+
+    per_label_touched_border = {lid: _touches_border(finals[lid]) for lid in label_ids}
+    touched_border = any(per_label_touched_border.values())
+
+    info = {
+        "n_lost": n_lost,
+        "touched_border": touched_border,
+        "per_label_touched_border": per_label_touched_border,
+    }
     for lid in label_ids:
         info[lid] = int(finals[lid].sum())
     return new_labels.astype(np.int32), info

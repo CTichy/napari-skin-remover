@@ -94,6 +94,7 @@ def grow_correct_label_2d(
             progress_cb(msg)
 
     group = set(label_ids) if isinstance(label_ids, (list, tuple, set)) else {int(label_ids)}
+    original_group = frozenset(group)  # convergence only ever judged on these, never a folded-in neighbor
     pad = int(initial_pad)
     group_grew = False
     last_new_labels = labels
@@ -125,7 +126,14 @@ def grow_correct_label_2d(
         )
         last_new_labels, last_info = new_labels, info
 
-        if not info["touched_border"]:
+        # Convergence is judged ONLY on the originally-requested label(s)
+        # -- a neighbor folded in purely to protect its own territory was
+        # never asked to be grown to its own true extent, so its border
+        # status must not keep this looping.
+        relevant_touched = any(
+            info["per_label_touched_border"][lid] for lid in original_group
+        )
+        if not relevant_touched:
             converged = True
             break
         pad += growth_step
@@ -183,6 +191,7 @@ def grow_correct_label_3d(
             progress_cb(msg)
 
     group = set(label_ids) if isinstance(label_ids, (list, tuple, set)) else {int(label_ids)}
+    original_group = frozenset(group)  # convergence only ever judged on these, never a folded-in neighbor
     pad = int(initial_pad)
     group_grew = False
     last_new_labels = labels
@@ -243,7 +252,14 @@ def grow_correct_label_3d(
         last_new_labels = working
         last_per_label_reports = per_label_reports
 
-        any_touched_border = any(r["touched_border"] for r in per_label_reports.values())
+        # Convergence is judged ONLY on the originally-requested label(s)
+        # -- a neighbor folded in purely to protect its own territory was
+        # never asked to be grown to its own true extent, so its border
+        # status must not keep this looping (see grow_correct_label_2d's
+        # own matching comment).
+        any_touched_border = any(
+            per_label_reports[lid]["touched_border"] for lid in original_group
+        )
         if not any_touched_border:
             converged = True
             break
